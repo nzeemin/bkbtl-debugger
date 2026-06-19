@@ -24,13 +24,8 @@ bool ParseCommandLine(std::vector<std::wstring>& wargs);
 //////////////////////////////////////////////////////////////////////
 // Globals
 
-#ifdef _MSC_VER
 #define OPTIONCHAR L'/'
 #define OPTIONSTR L"/"
-#else
-#define OPTIONCHAR L'-'
-#define OPTIONSTR L"-"
-#endif
 
 // Machine configuration selected via "conf:NAME" on the command line;
 // BK_CONF_BK0010_BASIC (BK-0010-BASIC) is the default.
@@ -228,7 +223,7 @@ int main(int argc, char* argv[])
 
 int wmain_impl(std::vector<std::wstring>& wargs)
 {
-    Console_Init();
+    Console_ColorInit();
 
     PrintWelcome();
 

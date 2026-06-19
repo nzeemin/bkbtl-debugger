@@ -123,9 +123,15 @@ void PrintMemoryDump(const CProcessor* pProc, uint16_t address, int lines = 8)
     for (int line = 0; line < lines; line++)
     {
         uint16_t dump[8];
+        uint16_t changed[8];
         int addrtype;
         for (int i = 0; i < 8; i++)
+        {
             dump[i] = g_pBoard->GetWordView((uint16_t)(address + i * 2), okHaltMode, false, &addrtype);
+            changed[i] = addrtype == ADDRTYPE_ROM
+                ? 0
+                : Emulator_GetChangeRamStatus(address + i * 2);
+        }
 
         TCHAR bufAddr[7];
         PrintOctalValue(bufAddr, address);
@@ -133,9 +139,11 @@ void PrintMemoryDump(const CProcessor* pProc, uint16_t address, int lines = 8)
 
         for (int i = 0; i < 8; i++)
         {
+            if (changed[i] != 0) Console_ColorModified();
             TCHAR bufValue[7];
             PrintOctalValue(bufValue, dump[i]);
             std::wcout << bufValue << L" ";
+            Console_ColorReset();
         }
         std::wcout << L" ";
 
@@ -164,27 +172,43 @@ void PrintMemoryDumpBytes(const CProcessor* pProc, uint16_t address, int lines =
 
     for (int line = 0; line < lines; line++)
     {
-        uint8_t dump[16];
-        for (int i = 0; i < 16; i++)
-            dump[i] = g_pBoard->GetByte((uint16_t)(address + i), okHaltMode);
+        uint16_t dump[8];
+        uint16_t changed[8];
+        int addrtype;
+        for (int i = 0; i < 8; i++)
+        {
+            dump[i] = g_pBoard->GetWordView((uint16_t)(address + i * 2), okHaltMode, false, &addrtype);
+            changed[i] = addrtype == ADDRTYPE_ROM
+                ? 0
+                : Emulator_GetChangeRamStatus(address + i * 2);
+        }
 
         TCHAR bufAddr[7];
         PrintOctalValue(bufAddr, address);
         std::wcout << L"  " << bufAddr << L"  ";
 
-        for (int i = 0; i < 16; i++)
+        for (int i = 0; i < 8; i++)
         {
+            uint16_t value = dump[i];
+            if (changed[i] != 0) Console_ColorModified();
             TCHAR bufValue[7];
-            PrintOctalValue(bufValue, dump[i]);
-            std::wcout << (bufValue + 3) << L" ";  // last 3 digits: a byte fits in 000..377
+            PrintOctalValue(bufValue, value & 0xFF);
+            std::wcout << (bufValue + 3) << L" ";
+            PrintOctalValue(bufValue, value >> 8);
+            std::wcout << (bufValue + 3) << L" ";
+            Console_ColorReset();
         }
         std::wcout << L" ";
 
-        for (int i = 0; i < 16; i++)
+        for (int i = 0; i < 8; i++)
         {
-            uint8_t ch = dump[i];
-            wchar_t wch = (ch < 32) ? L'\xB7' : (wchar_t)Translate_BK_Unicode(ch);
-            std::wcout << wch;
+            uint16_t value = dump[i];
+            uint8_t ch1 = (value >> 8);
+            wchar_t wch1 = (ch1 < 32) ? L'\xB7' : (wchar_t)Translate_BK_Unicode(ch1);
+            std::wcout << wch1;
+            uint8_t ch2 = (value >> 8);
+            wchar_t wch2 = (ch2 < 32) ? L'\xB7' : (wchar_t)Translate_BK_Unicode(ch2);
+            std::wcout << wch2;
         }
         std::wcout << std::endl;
 
@@ -332,6 +356,7 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  so, stepover   Step Over; executes and stops after the current instruction\n"
         L"  r, regs        Show register values\n"
         L"  regs ext       Show extended (I/O port) registers\n"
+        L"  status         Show machine status: uptime, floppy drives\n"
         L"  rN             Show value of register N; N=0..7\n"
         L"  rN=XXXXXX      Set register N to value XXXXXX; N=0..7\n"
         L"  rps            Show PS (processor status word)\n"
@@ -357,6 +382,8 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  loadbin FILE   Load a .bin file (tape image: start addr + size + data) into RAM\n"
         L"  statesave FILE Save full emulator state (memory, registers, ports) to FILE\n"
         L"  stateload FILE Load full emulator state from FILE\n"
+        L"  diskN attach FILE  Attach floppy image FILE to drive N; N=A..D\n"
+        L"  diskN detach   Detach floppy image from drive N; N=A..D\n"
         L"  screen [FILE]  Save black/white screenshot as FILE (PNG); default filename from timestamp\n"
         L"  screenc [FILE] Save color screenshot as FILE (PNG); default filename from timestamp\n"
         L"  q, quit, exit  Quit the debugger\n";
@@ -438,6 +465,33 @@ void CmdPrintExtendedRegisters(const ConsoleCommandParams& /*params*/)
     {
         PrintPortRegisterLine(0177130, PORTVIEW_FDDSTATE, _T("floppy state"));
         PrintPortRegisterLine(0177132, PORTVIEW_FDDDATA,  _T("floppy data"));
+    }
+}
+
+void CmdShowStatus(const ConsoleCommandParams& /*params*/)
+{
+    float uptime = Emulator_GetUptime();
+    std::wcout << L"Uptime: " << std::fixed << std::setprecision(2) << uptime << L" sec" << std::endl;
+
+    if ((g_nEmulatorConfiguration & BK_COPT_FDD) != 0)
+    {
+        std::wcout << L"Floppy engine: " << (Emulator_IsFloppyEngineOn() ? L"ON" : L"off") << std::endl;
+        for (int slot = 0; slot < 4; slot++)
+        {
+            wchar_t letter = (wchar_t)(L'A' + slot);
+            bool okAttached = Emulator_IsFloppyImageAttached(slot);
+            std::wcout << L"  disk" << letter << L": ";
+            if (okAttached)
+            {
+                std::wcout << L"attached"
+                            << (Emulator_IsFloppyReadOnly(slot) ? L", read-only" : L", read-write");
+            }
+            else
+            {
+                std::wcout << L"not attached";
+            }
+            std::wcout << std::endl;
+        }
     }
 }
 
@@ -585,6 +639,32 @@ void CmdStateLoad(const ConsoleCommandParams& params)
         std::wcout << L"Loaded state " << params.paramFilename << std::endl;
     else
         std::wcout << L"FAILED to load state " << params.paramFilename << std::endl;
+}
+
+// "diskA attach FILE" .. "diskD attach FILE" -- the slot letter is the 5th
+// character of commandText ("disk" is 4 chars), A=slot 0 .. D=slot 3.
+void CmdAttachFloppyImage(const ConsoleCommandParams& params)
+{
+    wchar_t letter = params.commandText[4];
+    int slot = letter - L'A';
+
+    std::basic_string<TCHAR> tfilename = WStringToTString(params.paramFilename);
+    bool result = Emulator_AttachFloppyImage(slot, tfilename.c_str());
+
+    if (result)
+        std::wcout << L"Attached disk" << letter << L": " << params.paramFilename << std::endl;
+    else
+        std::wcout << L"FAILED to attach disk" << letter << L": " << params.paramFilename << std::endl;
+}
+
+// "diskA detach" .. "diskD detach" -- same slot-letter convention as attach.
+void CmdDetachFloppyImage(const ConsoleCommandParams& params)
+{
+    wchar_t letter = params.commandText[4];
+    int slot = letter - L'A';
+
+    Emulator_DetachFloppyImage(slot);
+    std::wcout << L"Detached disk" << letter << std::endl;
 }
 
 void CmdScreenshot(const ConsoleCommandParams& params)
@@ -878,6 +958,7 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"rsp ",  ARGINFO_OCT,     CmdSetRegisterSP },              // rsp XXXXXX
     { L"rsp",   ARGINFO_NONE,    CmdPrintRegisterSP },            // rsp
     { L"regs ext", ARGINFO_NONE,  CmdPrintExtendedRegisters },     // regs ext
+    { L"status",   ARGINFO_NONE,  CmdShowStatus },                 // status
     { L"regs",  ARGINFO_NONE,    CmdPrintAllRegisters },          // regs
     { L"r",     ARGINFO_NONE,    CmdPrintAllRegisters },          // r
 
@@ -899,6 +980,15 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"loadbin", ARGINFO_FILENAME,     CmdLoadBin },                // loadbin FILENAME
     { L"statesave", ARGINFO_FILENAME,   CmdStateSave },              // statesave FILENAME
     { L"stateload", ARGINFO_FILENAME,   CmdStateLoad },              // stateload FILENAME
+
+    { L"diskA attach", ARGINFO_FILENAME, CmdAttachFloppyImage },     // diskA attach FILENAME
+    { L"diskB attach", ARGINFO_FILENAME, CmdAttachFloppyImage },     // diskB attach FILENAME
+    { L"diskC attach", ARGINFO_FILENAME, CmdAttachFloppyImage },     // diskC attach FILENAME
+    { L"diskD attach", ARGINFO_FILENAME, CmdAttachFloppyImage },     // diskD attach FILENAME
+    { L"diskA detach", ARGINFO_NONE,     CmdDetachFloppyImage },     // diskA detach
+    { L"diskB detach", ARGINFO_NONE,     CmdDetachFloppyImage },     // diskB detach
+    { L"diskC detach", ARGINFO_NONE,     CmdDetachFloppyImage },     // diskC detach
+    { L"diskD detach", ARGINFO_NONE,     CmdDetachFloppyImage },     // diskD detach
 
     { L"screenc", ARGINFO_OPT_FILENAME, CmdScreenshot },
     { L"screen",  ARGINFO_OPT_FILENAME, CmdScreenshot },
@@ -1035,8 +1125,10 @@ void PrintConsolePrompt()
 {
     CProcessor* pProc = GetCurrentProcessor();
     TCHAR bufAddr[7];
+    Console_ColorPrompt();
     PrintOctalValue(bufAddr, pProc->GetPC());
     std::wcout << bufAddr << L"> ";
+    Console_ColorReset();
 }
 
 bool DoConsoleCommand(const std::wstring& command)

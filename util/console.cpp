@@ -26,7 +26,7 @@ WORD g_wDefaultAttributes = 0;  // Console's original attributes, to restore on 
 //////////////////////////////////////////////////////////////////////
 
 
-void Console_Init()
+void Console_ColorInit()
 {
 #ifdef _MSC_VER
     g_hConsole = ::GetStdHandle(STD_OUTPUT_HANDLE);
@@ -52,6 +52,19 @@ void Console_Init()
 #endif
 }
 
+void Console_ColorPrompt()
+{
+    if (!g_okColorEnabled)
+        return;
+
+    // set cyan foreground
+#ifdef _MSC_VER
+    ::SetConsoleTextAttribute(g_hConsole, FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+#else
+    std::wcout << L"\033[36m";
+#endif
+}
+
 void Console_ColorModified(bool modified)
 {
     if (!g_okColorEnabled)
@@ -59,19 +72,19 @@ void Console_ColorModified(bool modified)
 
     if (modified)
     {
+        // set red foreground
 #ifdef _MSC_VER
         ::SetConsoleTextAttribute(g_hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
 #else
-        // \033[31m sets red foreground
         std::wcout << L"\033[31m";
 #endif
     }
     else
     {
+        // reset color
 #ifdef _MSC_VER
         ::SetConsoleTextAttribute(g_hConsole, g_wDefaultAttributes);
 #else
-        // \033[0m resets all styles
         std::wcout << L"\033[0m";
 #endif
     }
@@ -82,10 +95,10 @@ void Console_ColorReset()
     if (!g_okColorEnabled)
         return;
 
+    // reset color
 #ifdef _MSC_VER
     ::SetConsoleTextAttribute(g_hConsole, g_wDefaultAttributes);
 #else
-    // \033[0m resets all styles
     std::wcout << L"\033[0m";
 #endif
 }

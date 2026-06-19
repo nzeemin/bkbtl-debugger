@@ -57,6 +57,11 @@ void Emulator_OnUpdate();
 bool Emulator_IsRegisterChanged(int r);
 uint16_t Emulator_GetChangeRamStatus(uint16_t address);
 
+bool Emulator_AttachFloppyImage(int slot, LPCTSTR sFilePath);
+void Emulator_DetachFloppyImage(int slot);
+bool Emulator_IsFloppyImageAttached(int slot);
+bool Emulator_IsFloppyReadOnly(int slot);
+bool Emulator_IsFloppyEngineOn();
 bool Emulator_SaveImage(const std::string &sFilePath);
 bool Emulator_LoadImage(const std::string &sFilePath);
 

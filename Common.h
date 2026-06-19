@@ -35,16 +35,11 @@ typedef const TCHAR* LPCTSTR;
 #define _snprintf   snprintf
 #endif
 
-
 #ifdef __GNUC__
 #define CALLBACK
 #else
 #define CALLBACK __stdcall
 #endif
-
-//typedef void *HANDLE;
-//#define INVALID_HANDLE_VALUE ((HANDLE)(int32_t)-1)
-//#define DECLARE_HANDLE(name) struct name##__ { int unused; }; typedef struct name##__ *name
 
 
 //////////////////////////////////////////////////////////////////////

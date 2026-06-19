@@ -722,6 +722,33 @@ void CALLBACK Emulator_TeletypeCallback(uint8_t symbol)
 
 
 //////////////////////////////////////////////////////////////////////
+bool Emulator_AttachFloppyImage(int slot, LPCTSTR sFilePath)
+{
+    return g_pBoard->AttachFloppyImage(slot, sFilePath);
+}
+
+void Emulator_DetachFloppyImage(int slot)
+{
+    g_pBoard->DetachFloppyImage(slot);
+}
+
+bool Emulator_IsFloppyImageAttached(int slot)
+{
+    return g_pBoard->IsFloppyImageAttached(slot);
+}
+
+bool Emulator_IsFloppyReadOnly(int slot)
+{
+    return g_pBoard->IsFloppyReadOnly(slot);
+}
+
+bool Emulator_IsFloppyEngineOn()
+{
+    return g_pBoard->IsFloppyEngineOn();
+}
+
+
+//////////////////////////////////////////////////////////////////////
 //
 // Emulator image format - see CMotherboard::SaveToImage()
 // Image header format (32 bytes):
