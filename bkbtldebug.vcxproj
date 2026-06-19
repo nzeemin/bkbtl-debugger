@@ -151,6 +151,7 @@
     <ClCompile Include="Emulator.cpp" />
     <ClCompile Include="stdafx.cpp" />
     <ClCompile Include="util\BitmapFile.cpp" />
+    <ClCompile Include="util\console.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="bkbtldebug.h" />
@@ -163,6 +164,7 @@
     <ClInclude Include="Emulator.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="util\BitmapFile.h" />
+    <ClInclude Include="util\console.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

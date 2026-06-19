@@ -8,6 +8,7 @@
 #include "Emulator.h"
 #include "emubase/Emubase.h"
 #include "commands.h"
+#include "util/console.h"
 
 
 //////////////////////////////////////////////////////////////////////
@@ -31,6 +32,67 @@ bool ParseCommandLine(std::vector<std::wstring>& wargs);
 #define OPTIONSTR L"-"
 #endif
 
+// Machine configuration selected via "conf:NAME" on the command line;
+// BK_CONF_BK0010_BASIC (BK-0010-BASIC) is the default.
+BKConfiguration g_nSelectedConfiguration = BK_CONF_BK0010_BASIC;
+
+struct ConfigurationNameStruct
+{
+    const wchar_t* name;
+    BKConfiguration configuration;
+};
+
+const ConfigurationNameStruct ConfigurationNames[] =
+{
+    { L"BK-0010-BASIC", BK_CONF_BK0010_BASIC },
+    { L"BK-0010-FOCAL", BK_CONF_BK0010_FOCAL },
+    { L"BK-0010-FDD",   BK_CONF_BK0010_FDD },
+    { L"BK-0011M",      BK_CONF_BK0011 },
+    { L"BK-0011M-FDD",  BK_CONF_BK0011_FDD },
+};
+const size_t ConfigurationNamesCount = sizeof(ConfigurationNames) / sizeof(ConfigurationNames[0]);
+
+// Portable case-insensitive wide string equality check (avoids relying on
+// _wcsicmp, which is MSVC-only, or wcscasecmp, which isn't universally
+// available either).
+bool WStringEqualsIgnoreCase(const std::wstring& a, const std::wstring& b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (size_t i = 0; i < a.size(); i++)
+    {
+        if (towlower(a[i]) != towlower(b[i]))
+            return false;
+    }
+    return true;
+}
+
+// Look up a configuration by name (case-insensitive). Returns true and
+// fills *pConfiguration on success.
+bool FindConfigurationByName(const std::wstring& name, BKConfiguration* pConfiguration)
+{
+    for (size_t i = 0; i < ConfigurationNamesCount; i++)
+    {
+        if (WStringEqualsIgnoreCase(name, ConfigurationNames[i].name))
+        {
+            *pConfiguration = ConfigurationNames[i].configuration;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Name for the currently selected configuration, for display purposes.
+const wchar_t* GetConfigurationName(BKConfiguration configuration)
+{
+    for (size_t i = 0; i < ConfigurationNamesCount; i++)
+    {
+        if (ConfigurationNames[i].configuration == configuration)
+            return ConfigurationNames[i].name;
+    }
+    return L"(unknown)";
+}
+
 
 //////////////////////////////////////////////////////////////////////
 
@@ -44,7 +106,14 @@ void PrintWelcome()
 void PrintUsage()
 {
     std::wcout << std::endl << L"Usage:" << std::endl
-            << L"  TODO" << std::endl
+            << L"  conf:NAME      Select machine configuration; default is BK-0010-BASIC" << std::endl
+            << L"                 Available: ";
+    for (size_t i = 0; i < ConfigurationNamesCount; i++)
+    {
+        if (i > 0) std::wcout << L", ";
+        std::wcout << ConfigurationNames[i].name;
+    }
+    std::wcout << std::endl
             << L"  Options:" << std::endl
             << L"    " << OPTIONSTR << L"TODO" << std::endl;
 }
@@ -65,6 +134,17 @@ bool ParseCommandLine(std::vector<std::wstring>& wargs)
                 std::wcout << L"Unknown option: " << arg << std::endl;
                 return false;
             }
+        }
+        else if (warg.compare(0, 5, L"conf:") == 0)
+        {
+            std::wstring confName = warg.substr(5);
+            BKConfiguration configuration;
+            if (!FindConfigurationByName(confName, &configuration))
+            {
+                std::wcout << L"Unknown configuration: " << confName << std::endl;
+                return false;
+            }
+            g_nSelectedConfiguration = configuration;
         }
         else
         {
@@ -148,6 +228,8 @@ int main(int argc, char* argv[])
 
 int wmain_impl(std::vector<std::wstring>& wargs)
 {
+    Console_Init();
+
     PrintWelcome();
 
     if (!ParseCommandLine(wargs))
@@ -156,13 +238,15 @@ int wmain_impl(std::vector<std::wstring>& wargs)
         return 255;
     }
 
+    std::wcout << L"Configuration: " << GetConfigurationName(g_nSelectedConfiguration) << std::endl;
+
     if (!Emulator_Init())
     {
         std::wcout << L"Failed to initialize emulator." << std::endl;
         return 1;
     }
 
-    if (!Emulator_InitConfiguration(BK_CONF_BK0010_BASIC))
+    if (!Emulator_InitConfiguration(g_nSelectedConfiguration))
     {
         std::wcout << L"Failed to initialize machine configuration." << std::endl;
         Emulator_Done();

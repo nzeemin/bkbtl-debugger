@@ -15,10 +15,8 @@ extern bool g_okEmulatorRunning;
 
 extern uint8_t* g_pEmulatorRam;  // RAM values - for change tracking
 extern uint8_t* g_pEmulatorChangedRam;  // RAM change flags
-extern uint16_t g_wEmulatorCpuPC;      // Current PC value
-extern uint16_t g_wEmulatorPrevCpuPC;  // Previous PC value
-extern uint16_t g_wEmulatorPpuPC;      // Current PC value
-extern uint16_t g_wEmulatorPrevPpuPC;  // Previous PC value
+extern uint16_t g_wEmulatorCpuR[9];      // Current PC value
+extern uint16_t g_wEmulatorPrevCpuR[9];  // Previous PC value
 
 extern const uint32_t ScreenView_BWPalette[4];
 extern const uint32_t ScreenView_ColorPalette[4];
@@ -56,6 +54,7 @@ void Emulator_ProcessKeyEvent();
 
 // Update cached values after Run or Step
 void Emulator_OnUpdate();
+bool Emulator_IsRegisterChanged(int r);
 uint16_t Emulator_GetChangeRamStatus(uint16_t address);
 
 bool Emulator_SaveImage(const std::string &sFilePath);

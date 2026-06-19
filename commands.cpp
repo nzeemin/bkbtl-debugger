@@ -21,8 +21,11 @@
 #include "Emulator.h"
 #include "emubase/Emubase.h"
 #include "util/BitmapFile.h"
+#include "util/console.h"
+
 
 //////////////////////////////////////////////////////////////////////
+
 
 const wchar_t* const MESSAGE_UNKNOWN_COMMAND  = L" Unknown command.";
 const wchar_t* const MESSAGE_INVALID_REGNUM   = L" Invalid register number, 0..7 expected.";
@@ -333,6 +336,10 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  rN=XXXXXX      Set register N to value XXXXXX; N=0..7\n"
         L"  rps            Show PS (processor status word)\n"
         L"  rps=XXXXXX     Set PS to value XXXXXX\n"
+        L"  rpc            Show PC (same as the PC shown by r/regs)\n"
+        L"  rpc=XXXXXX     Set PC to value XXXXXX\n"
+        L"  rsp            Show SP (same as the SP shown by r/regs)\n"
+        L"  rsp=XXXXXX     Set SP to value XXXXXX\n"
         L"  d, disasm      Disassemble from PC; use D for short format\n"
         L"  dXXXXXX, disasm XXXXXX  Disassemble from address XXXXXX\n"
         L"  m, memory      Memory dump at current address\n"
@@ -343,6 +350,9 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  bc             Remove all breakpoints\n"
         L"  bcXXXXXX       Remove breakpoint at address XXXXXX\n"
         L"  mo, monitor    Type M O / Enter (BASIC) or P SPACE M / Enter (FOCAL) to exit to Monitor\n"
+        L"  t, trace       Toggle instruction tracing to trace.log on/off\n"
+        L"  tXXXXXX, trace XXXXXX  Set trace flags XXXXXX (see TRACE_xxx constants)\n"
+        L"  tc             Clear trace.log\n"
         L"  memsave [FILE] Save memory dump as FILE; default memdump.bin\n"
         L"  loadbin FILE   Load a .bin file (tape image: start addr + size + data) into RAM\n"
         L"  statesave FILE Save full emulator state (memory, registers, ports) to FILE\n"
@@ -359,17 +369,41 @@ void CmdPrintAllRegisters(const ConsoleCommandParams& /*params*/)
     {
         TCHAR bufOctal[7];
         PrintOctalValue(bufOctal, pProc->GetReg(r));
-        std::wcout << REGISTER_NAME[r] << L"=" << bufOctal << L"  ";
+        std::wcout << REGISTER_NAME[r] << L"=";
+        Console_ColorModified(Emulator_IsRegisterChanged(r));
+        std::wcout << bufOctal;
+        Console_ColorReset();
+        std::wcout << L" ";
     }
     TCHAR bufPSW[7];
     PrintOctalValue(bufPSW, pProc->GetPSW());
-    std::wcout << L"PSW=" << bufPSW
-                << L" [N=" << pProc->GetN()
-                << L" Z=" << pProc->GetZ()
-                << L" V=" << pProc->GetV()
-                << L" C=" << pProc->GetC()
-                << L" T=" << ((pProc->GetPSW() & PSW_T) != 0 ? 1 : 0)
-                << L"]" << std::endl;
+    uint16_t pswprev = g_wEmulatorPrevCpuR[8];
+    uint16_t psw = g_wEmulatorCpuR[8];
+    std::wcout << L"PSW=";
+    Console_ColorModified(pswprev != psw);
+    std::wcout << bufPSW;
+    Console_ColorReset();
+    std::wcout << L" [N=";
+    Console_ColorModified((pswprev & PSW_N) != (psw & PSW_N));
+    std::wcout << pProc->GetN();
+    Console_ColorReset();
+    std::wcout << L" Z=";
+    Console_ColorModified((pswprev & PSW_Z) != (psw & PSW_Z));
+    std::wcout << pProc->GetZ();
+    Console_ColorReset();
+    std::wcout << L" V=";
+    Console_ColorModified((pswprev & PSW_V) != (psw & PSW_V));
+    std::wcout << pProc->GetV();
+    Console_ColorReset();
+    std::wcout << L" C=";
+    Console_ColorModified((pswprev & PSW_C) != (psw & PSW_C));
+    std::wcout << pProc->GetC();
+    Console_ColorReset();
+    std::wcout << L" T=";
+    Console_ColorModified((pswprev & PSW_T) != (psw & PSW_T));
+    std::wcout << ((pProc->GetPSW() & PSW_T) != 0 ? 1 : 0);
+    Console_ColorReset();
+    std::wcout << L"]" << std::endl;
 }
 
 // Print one extended (I/O port) register line: address, value, label.
@@ -438,6 +472,34 @@ void CmdSetRegisterPSW(const ConsoleCommandParams& params)
     pProc->SetPSW(value);
 }
 
+void CmdPrintRegisterSP(const ConsoleCommandParams& /*params*/)
+{
+    CProcessor* pProc = GetCurrentProcessor();
+    uint16_t value = pProc->GetReg(6);
+    PrintRegisterLine(_T("SP"), value);
+}
+
+void CmdSetRegisterSP(const ConsoleCommandParams& params)
+{
+    uint16_t value = params.paramOct1;
+    CProcessor* pProc = GetCurrentProcessor();
+    pProc->SetReg(6, value);
+}
+
+void CmdPrintRegisterPC(const ConsoleCommandParams& /*params*/)
+{
+    CProcessor* pProc = GetCurrentProcessor();
+    uint16_t value = pProc->GetReg(7);
+    PrintRegisterLine(_T("PC"), value);
+}
+
+void CmdSetRegisterPC(const ConsoleCommandParams& params)
+{
+    uint16_t value = params.paramOct1;
+    CProcessor* pProc = GetCurrentProcessor();
+    pProc->SetReg(7, value);
+}
+
 void CmdReset(const ConsoleCommandParams& /*params*/)
 {
     Emulator_Reset();
@@ -448,6 +510,7 @@ void CmdStepInto(const ConsoleCommandParams& /*params*/)
     CProcessor* pProc = GetCurrentProcessor();
     PrintDisassemble(pProc, pProc->GetPC(), true, false);
     g_pBoard->DebugTicks();
+    Emulator_OnUpdate();  // Refresh change-tracking snapshot after this single instruction
 }
 
 void CmdStepOver(const ConsoleCommandParams& /*params*/)
@@ -463,6 +526,7 @@ void CmdStepOver(const ConsoleCommandParams& /*params*/)
     if ((instr & ~(uint16_t)0077) == PI_JMP || (instr & ~(uint16_t)0377) == PI_BR)
     {
         g_pBoard->DebugTicks();
+        Emulator_OnUpdate();  // Refresh change-tracking snapshot after this single instruction
         return;
     }
 
@@ -605,6 +669,7 @@ void RunUntilBreakpoint(int maxFrames)
             break;
         }
     }
+    Emulator_OnUpdate();  // Refresh change-tracking snapshot now that we've stopped
     CProcessor* pProc = GetCurrentProcessor();
     TCHAR bufAddr[7];
     PrintOctalValue(bufAddr, pProc->GetPC());
@@ -691,6 +756,42 @@ void CmdGotoMonitor(const ConsoleCommandParams& /*params*/)
     GotoMonitor();
 }
 
+// Set the board's trace mask and report the new state.
+// Mirrors ConsoleView_TraceLog: turning tracing off also closes the log
+// file handle so trace.log is flushed and available immediately.
+void TraceLog(uint32_t value)
+{
+    g_pBoard->SetTrace(value);
+    if (value != TRACE_NONE)
+    {
+        TCHAR bufFlags[7];
+        PrintOctalValue(bufFlags, (uint16_t)g_pBoard->GetTrace());
+        std::wcout << L" Trace ON, trace flags " << bufFlags << std::endl;
+    }
+    else
+    {
+        std::wcout << L" Trace OFF." << std::endl;
+        DebugLogCloseFile();
+    }
+}
+
+void CmdTraceLogWithMask(const ConsoleCommandParams& params)
+{
+    TraceLog(params.paramOct1);
+}
+
+void CmdTraceLogOnOff(const ConsoleCommandParams& /*params*/)
+{
+    uint32_t dwTrace = (g_pBoard->GetTrace() == TRACE_NONE ? TRACE_ALL : TRACE_NONE);
+    TraceLog(dwTrace);
+}
+
+void CmdClearTraceLog(const ConsoleCommandParams& /*params*/)
+{
+    DebugLogClear();
+    std::wcout << L" Trace log cleared." << std::endl;
+}
+
 void CmdPrintAllBreakpoints(const ConsoleCommandParams& /*params*/)
 {
     const uint16_t* pbps = Emulator_GetCPUBreakpointList();
@@ -770,6 +871,12 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"rps=",  ARGINFO_OCT,     CmdSetRegisterPSW },             // rps=XXXXXX
     { L"rps ",  ARGINFO_OCT,     CmdSetRegisterPSW },             // rps XXXXXX
     { L"rps",   ARGINFO_NONE,    CmdPrintRegisterPSW },           // rps
+    { L"rpc=",  ARGINFO_OCT,     CmdSetRegisterPC },              // rpc=XXXXXX
+    { L"rpc ",  ARGINFO_OCT,     CmdSetRegisterPC },              // rpc XXXXXX
+    { L"rpc",   ARGINFO_NONE,    CmdPrintRegisterPC },            // rpc
+    { L"rsp=",  ARGINFO_OCT,     CmdSetRegisterSP },              // rsp=XXXXXX
+    { L"rsp ",  ARGINFO_OCT,     CmdSetRegisterSP },              // rsp XXXXXX
+    { L"rsp",   ARGINFO_NONE,    CmdPrintRegisterSP },            // rsp
     { L"regs ext", ARGINFO_NONE,  CmdPrintExtendedRegisters },     // regs ext
     { L"regs",  ARGINFO_NONE,    CmdPrintAllRegisters },          // regs
     { L"r",     ARGINFO_NONE,    CmdPrintAllRegisters },          // r
@@ -798,6 +905,12 @@ const ConsoleCommandStruct ConsoleCommands[] =
 
     { L"monitor", ARGINFO_NONE,   CmdGotoMonitor },
     { L"mo",      ARGINFO_NONE,   CmdGotoMonitor },
+
+    { L"tc",    ARGINFO_NONE,    CmdClearTraceLog },              // tc
+    { L"trace ", ARGINFO_OCT,    CmdTraceLogWithMask },           // trace XXXXXX
+    { L"t",     ARGINFO_OCT,     CmdTraceLogWithMask },           // tXXXXXX
+    { L"trace", ARGINFO_NONE,    CmdTraceLogOnOff },              // trace
+    { L"t",     ARGINFO_NONE,    CmdTraceLogOnOff },              // t
     { L"memory bytes ", ARGINFO_OCT, CmdPrintMemoryDumpBytesAtAddress }, // memory bytes XXXXXX
     { L"memory ", ARGINFO_OCT,   CmdPrintMemoryDumpAtAddress },  // memory XXXXXX
     { L"memory",  ARGINFO_NONE,   CmdPrintMemoryDumpAtPC },       // memory

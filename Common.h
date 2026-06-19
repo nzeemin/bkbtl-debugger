@@ -42,9 +42,9 @@ typedef const TCHAR* LPCTSTR;
 #define CALLBACK __stdcall
 #endif
 
-typedef void *HANDLE;
-#define INVALID_HANDLE_VALUE ((HANDLE)(int32_t)-1)
-#define DECLARE_HANDLE(name) struct name##__ { int unused; }; typedef struct name##__ *name
+//typedef void *HANDLE;
+//#define INVALID_HANDLE_VALUE ((HANDLE)(int32_t)-1)
+//#define DECLARE_HANDLE(name) struct name##__ { int unused; }; typedef struct name##__ *name
 
 
 //////////////////////////////////////////////////////////////////////
@@ -86,6 +86,8 @@ void DebugPrint(LPCTSTR message);
 void DebugPrintFormat(LPCTSTR pszFormat, ...);
 void DebugLog(LPCTSTR message);
 void DebugLogFormat(LPCTSTR pszFormat, ...);
+void DebugLogClear();      // Truncate trace.log to empty
+void DebugLogCloseFile();  // Close the trace.log file handle, if open
 
 #endif // !defined(PRODUCT)
 

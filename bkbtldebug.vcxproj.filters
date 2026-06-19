@@ -48,6 +48,9 @@
     <ClCompile Include="util\BitmapFile.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="util\console.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="stdafx.h">

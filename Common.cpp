@@ -86,6 +86,26 @@ void DebugLogFormat(LPCTSTR pszFormat, ...)
     DebugLog(buffer);
 }
 
+void DebugLogCloseFile()
+{
+    if (Common_LogFile != nullptr)
+    {
+        ::fclose(Common_LogFile);
+        Common_LogFile = nullptr;
+    }
+}
+
+void DebugLogClear()
+{
+    // Close the handle first if open, since it's positioned at EOF from
+    // appending and reopening in "w" mode from here wouldn't affect an
+    // already-open append handle held elsewhere.
+    DebugLogCloseFile();
+    FILE* f = ::fopen(TRACELOG_FILE_NAME, "wb");
+    if (f != nullptr)
+        ::fclose(f);
+}
+
 
 #endif // !defined(PRODUCT)
 

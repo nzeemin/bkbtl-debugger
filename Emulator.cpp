@@ -37,8 +37,9 @@ static long m_nUptimeFrameCount = 0;
 
 uint8_t* g_pEmulatorRam;  // RAM values - for change tracking
 uint8_t* g_pEmulatorChangedRam;  // RAM change flags
-uint16_t g_wEmulatorCpuPC = 0177777;      // Current PC value
-uint16_t g_wEmulatorPrevCpuPC = 0177777;  // Previous PC value
+uint16_t g_wEmulatorCpuR[9] =  // Current register values - R0..R7, PSW
+    { 0177777, 0177777, 0177777, 0177777, 0177777, 0177777, 0177777, 0177777, 0177777 };
+uint16_t g_wEmulatorPrevCpuR[9];  // Previous register values - R0..R7, PSW
 
 static const int KEYEVENT_QUEUE_SIZE = 32;
 static uint16_t m_EmulatorKeyQueue[KEYEVENT_QUEUE_SIZE];
@@ -173,16 +174,16 @@ bool Emulator_Init()
     g_pBoard = new CMotherboard();
 
     // Allocate memory for old RAM values
-    g_pEmulatorRam = (uint8_t*) ::malloc(65536);  ::memset(g_pEmulatorRam, 0, 65536);
-    g_pEmulatorChangedRam = (uint8_t*) ::malloc(65536);  ::memset(g_pEmulatorChangedRam, 0, 65536);
+    g_pEmulatorRam = (uint8_t*) ::calloc(65536, 1);
+    g_pEmulatorChangedRam = (uint8_t*) ::calloc(65536, 1);
 
     g_pBoard->Reset();
 
     //g_sound = new QSoundOut();
-    //if (m_okEmulatorSound)
-    //{
-    //    g_pBoard->SetSoundGenCallback(Emulator_FeedDAC);
-    //}
+    if (m_okEmulatorSound)
+    {
+        g_pBoard->SetSoundGenCallback(Emulator_FeedDAC);
+    }
 
     m_nUptimeFrameCount = 0;
     m_dwEmulatorUptime = 0;
@@ -507,8 +508,11 @@ float Emulator_GetUptime()
 void Emulator_OnUpdate()
 {
     // Update stored PC value
-    g_wEmulatorPrevCpuPC = g_wEmulatorCpuPC;
-    g_wEmulatorCpuPC = g_pBoard->GetCPU()->GetPC();
+    for (int r = 0; r < 9; r++)
+        g_wEmulatorPrevCpuR[r] = g_wEmulatorCpuR[r];
+    for (int r = 0; r < 8; r++)
+        g_wEmulatorCpuR[r] = g_pBoard->GetCPU()->GetReg(r);
+    g_wEmulatorCpuR[8] = g_pBoard->GetCPU()->GetPSW();
 
     // Update memory change flags
     {
@@ -526,6 +530,11 @@ void Emulator_OnUpdate()
         }
         while (addr < 65535);
     }
+}
+
+bool Emulator_IsRegisterChanged(int r)
+{
+    return g_wEmulatorPrevCpuR[r] != g_wEmulatorCpuR[r];
 }
 
 // Get RAM change flag
@@ -809,7 +818,10 @@ bool Emulator_LoadImage(const std::string &sFilePath)
     g_pBoard->LoadFromImage(pImage);
 
     m_dwEmulatorUptime = *(uint32_t*)(pImage + 16);
-    g_wEmulatorCpuPC = g_pBoard->GetCPU()->GetPC();
+
+    for (int r = 0; r < 8; r++)
+        g_wEmulatorCpuR[r] = g_pBoard->GetCPU()->GetReg(r);
+    g_wEmulatorCpuR[8] = g_pBoard->GetCPU()->GetPSW();
 
     // Free memory, close file
     ::free(pImage);
