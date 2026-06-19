@@ -885,32 +885,41 @@ uint16_t CMotherboard::GetPortView(uint16_t address) const
     case 0177566:  // Serial port interrupt vector
         return 060;
 
-    case 0177706:  // System Timer counter start value -- регистр установки таймера
+    case PORTVIEW_TIMERREL:  // System Timer counter start value -- регистр установки таймера
         return m_timerreload;
-    case 0177710:  // System Timer Counter -- регистр счетчика таймера
+    case PORTVIEW_TIMERVAL:  // System Timer Counter -- регистр счетчика таймера
         return m_timer;
-    case 0177712:  // System Timer Manage -- регистр управления таймера
+    case PORTVIEW_TIMERCTL:  // System Timer Manage -- регистр управления таймера
         return m_timerflags;
 
-    case 0177660:  // Keyboard status register
+    case PORTVIEW_KEYBSTATUS:  // Keyboard status register
         return m_Port177660;
-    case 0177662:  // Keyboard data register
+    case PORTVIEW_KEYBDATA:  // Keyboard data register
         return m_Port177662rd;
 
-    case 0177664:  // Scroll register
+    case PORTVIEW_PALETTE:
+        return m_Port177662wr;
+
+    case PORTVIEW_SCROLL:  // Scroll register
         return m_Port177664;
 
-    case 0177714:  // Parallel port register
+    case PORTVIEW_PARALLELIN:  // Parallel port register
         return m_Port177714in;
+    case PORTVIEW_PARALLELOUT:  // Parallel port register
+        return m_Port177714out;
 
-    case 0177716:  // System register
+    case PORTVIEW_SYSTEM:  // System register
         return m_Port177716;
+    case PORTVIEW_SYSTEMMEM:  // System register (memory)
+        return m_Port177716mem;
+    case PORTVIEW_SYSTEMTAP:  // System register (tape)
+        return m_Port177716tap;
 
-    case 0177130:  // Floppy state
+    case PORTVIEW_FDDSTATE:  // Floppy state
         if (m_pFloppyCtl != nullptr)
             return m_pFloppyCtl->GetStateView();
         return 0;
-    case 0177132:  // Floppy data
+    case PORTVIEW_FDDDATA:  // Floppy data
         if (m_pFloppyCtl != nullptr)
             return m_pFloppyCtl->GetDataView();
         return 0;

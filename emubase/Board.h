@@ -101,6 +101,21 @@ enum BKConfiguration
 #define KEYB_LAT                0x02
 #define KEYB_LOWERREG           0x10
 
+// Константы для получения значений внутренних регистров из метода GetPortView
+#define PORTVIEW_TIMERREL       0177706
+#define PORTVIEW_TIMERVAL       0177710
+#define PORTVIEW_TIMERCTL       0177712
+#define PORTVIEW_KEYBSTATUS     0177660
+#define PORTVIEW_KEYBDATA       0177662
+#define PORTVIEW_PALETTE        0177663
+#define PORTVIEW_SCROLL         0177664
+#define PORTVIEW_PARALLELIN     0177714
+#define PORTVIEW_PARALLELOUT    0177715
+#define PORTVIEW_SYSTEM         0177716
+#define PORTVIEW_SYSTEMMEM      0177717
+#define PORTVIEW_SYSTEMTAP      0177721
+#define PORTVIEW_FDDSTATE       0177130
+#define PORTVIEW_FDDDATA        0177132
 
 // Tape emulator callback used to read a tape recorded data.
 // Input:

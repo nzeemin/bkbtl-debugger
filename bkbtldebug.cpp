@@ -134,6 +134,8 @@ int wmain_impl(std::vector<std::wstring>& wargs)
         return 1;
     }
 
+    std::wcout << L"Use 'h' command to show help." << std::endl;
+
     std::wstring line;
     for (;;)
     {

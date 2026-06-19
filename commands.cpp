@@ -151,21 +151,42 @@ void PrintMemoryDump(const CProcessor* pProc, uint16_t address, int lines = 8)
     }
 }
 
-// Save full 64K memory dump to memdump.bin in the current directory.
-// Ported from ConsoleView_SaveMemoryDump, using standard C++ file I/O
-// instead of Win32 CreateFile/WriteFile.
-bool SaveMemoryDump()
+// Print memory dump: address, 16 bytes in octal (3 digits each), then their
+// ASCII representation. Same layout as PrintMemoryDump but byte-granular --
+// uses the same PrintOctalValue helper, taking only its 3 lowest digits
+// (a byte never needs more than 3 octal digits: 000..377).
+void PrintMemoryDumpBytes(const CProcessor* pProc, uint16_t address, int lines = 8)
 {
-    std::vector<uint8_t> buf(65536);
-    for (int i = 0; i < 65536; i++)
-        buf[i] = g_pBoard->GetByte((uint16_t)i, true);
+    bool okHaltMode = pProc->IsHaltMode();
 
-    std::ofstream file("memdump.bin", std::ios::binary | std::ios::trunc);
-    if (!file.is_open())
-        return false;
+    for (int line = 0; line < lines; line++)
+    {
+        uint8_t dump[16];
+        for (int i = 0; i < 16; i++)
+            dump[i] = g_pBoard->GetByte((uint16_t)(address + i), okHaltMode);
 
-    file.write(reinterpret_cast<const char*>(buf.data()), buf.size());
-    return file.good();
+        TCHAR bufAddr[7];
+        PrintOctalValue(bufAddr, address);
+        std::wcout << L"  " << bufAddr << L"  ";
+
+        for (int i = 0; i < 16; i++)
+        {
+            TCHAR bufValue[7];
+            PrintOctalValue(bufValue, dump[i]);
+            std::wcout << (bufValue + 3) << L" ";  // last 3 digits: a byte fits in 000..377
+        }
+        std::wcout << L" ";
+
+        for (int i = 0; i < 16; i++)
+        {
+            uint8_t ch = dump[i];
+            wchar_t wch = (ch < 32) ? L'\xB7' : (wchar_t)Translate_BK_Unicode(ch);
+            std::wcout << wch;
+        }
+        std::wcout << std::endl;
+
+        address += 16;
+    }
 }
 
 // Convert a wstring command-line argument (e.g. a filename) to a TCHAR
@@ -183,6 +204,81 @@ std::basic_string<TCHAR> WStringToTString(const std::wstring& ws)
     std::wcstombs(buf.data(), ws.c_str(), buf.size());
     return std::string(buf.data());
 #endif
+}
+
+// Convert a wstring command-line argument to a plain std::string, always
+// narrow regardless of TCHAR's width. Needed for APIs that hardcode
+// std::string in their signature (e.g. Emulator_SaveImage/LoadImage)
+// rather than using TCHAR/LPCTSTR.
+std::string WStringToNarrowString(const std::wstring& ws)
+{
+    std::vector<char> buf(ws.size() * MB_CUR_MAX + 1);
+    std::wcstombs(buf.data(), ws.c_str(), buf.size());
+    return std::string(buf.data());
+}
+
+// Save full 64K memory dump to a file ("memdump.bin" by default).
+// Ported from ConsoleView_SaveMemoryDump, using standard C++ file I/O
+// instead of Win32 CreateFile/WriteFile.
+bool SaveMemoryDump(const std::wstring& wfilename)
+{
+    std::wstring filename = wfilename.empty() ? L"memdump.bin" : wfilename;
+    std::basic_string<TCHAR> tfilename = WStringToTString(filename);
+
+    std::vector<uint8_t> buf(65536);
+    for (int i = 0; i < 65536; i++)
+        buf[i] = g_pBoard->GetByte((uint16_t)i, true);
+
+    std::ofstream file(tfilename.c_str(), std::ios::binary | std::ios::trunc);
+    if (!file.is_open())
+        return false;
+
+    file.write(reinterpret_cast<const char*>(buf.data()), buf.size());
+    return file.good();
+}
+
+// Load a .bin file (the classic BK tape image format: a 2-word header --
+// little-endian start address, then little-endian byte count -- followed
+// by that many bytes of raw memory image) and copy its data into emulated
+// RAM at the given start address.
+//
+// Returns an empty string on success, or a human-readable error message on
+// failure (file not found / unreadable, oversized, or header size mismatch).
+std::wstring LoadBin(const std::wstring& wfilename)
+{
+    std::basic_string<TCHAR> tfilename = WStringToTString(wfilename);
+
+    std::ifstream file(tfilename.c_str(), std::ios::binary);
+    if (!file.is_open())
+        return L"could not open file";
+
+    // Read up to 4 (header) + 65536 (max RAM image) bytes.
+    const size_t maxTotal = 4 + 65536;
+    std::vector<uint8_t> buf(maxTotal);
+    file.read(reinterpret_cast<char*>(buf.data()), maxTotal);
+    std::streamsize bytesRead = file.gcount();
+
+    if (bytesRead < 4)
+        return L"file too small, missing header";
+
+    uint16_t startAddress = (uint16_t)(buf[0] | (buf[1] << 8));
+    uint16_t sizeField     = (uint16_t)(buf[2] | (buf[3] << 8));
+
+    size_t dataBytes = (size_t)bytesRead - 4;
+    if ((size_t)sizeField != dataBytes)
+    {
+        // Distinguish "there's more data in the file than we read" (file
+        // larger than our 4+65536 cap) from a genuine header/size mismatch,
+        // since the two call for different messages.
+        if (dataBytes == 65536 && !file.eof())
+            return L"file too large (more than 65536 bytes of data)";
+        return L"size field in header does not match file size";
+    }
+
+    for (size_t i = 0; i < dataBytes; i++)
+        g_pBoard->SetByte((uint16_t)(startAddress + i), true, buf[4 + i]);
+
+    return L"";
 }
 
 // Render the current screen and save it as a PNG file.
@@ -224,28 +320,33 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
 {
     std::wcout <<
         L"Console command list:\n"
-        L"  d              Disassemble from PC; use D for short format\n"
-        L"  dXXXXXX        Disassemble from address XXXXXX\n"
+        L"  h, help, ?     Show this help\n"
+        L"  reset          Reset the machine\n"
         L"  g, go          Go; free run\n"
-        L"  gXXXXXX        Go; run and stop at address XXXXXX\n"
-        L"  go frames N    Go; run for N frames\n"
-        L"  h              Show this help\n"
-        L"  m, memory      Memory dump at current address\n"
-        L"  mXXXXXX        Memory dump at address XXXXXX\n"
-        L"  mo, monitor    Type M O / Enter (BASIC) or P SPACE M / Enter (FOCAL) to exit to Monitor\n"
+        L"  gXXXXXX, go XXXXXX  Go; run and stop at address XXXXXX\n"
+        L"  go frames N    Go; run for N frames, decimal (1 sec = 25 frames)\n"
+        L"  s, step        Step Into; executes one instruction\n"
+        L"  so, stepover   Step Over; executes and stops after the current instruction\n"
         L"  r, regs        Show register values\n"
+        L"  regs ext       Show extended (I/O port) registers\n"
         L"  rN             Show value of register N; N=0..7\n"
         L"  rN=XXXXXX      Set register N to value XXXXXX; N=0..7\n"
         L"  rps            Show PS (processor status word)\n"
         L"  rps=XXXXXX     Set PS to value XXXXXX\n"
-        L"  reset          Reset the machine\n"
-        L"  s, step        Step Into; executes one instruction\n"
-        L"  so, stepover   Step Over; executes and stops after the current instruction\n"
+        L"  d, disasm      Disassemble from PC; use D for short format\n"
+        L"  dXXXXXX, disasm XXXXXX  Disassemble from address XXXXXX\n"
+        L"  m, memory      Memory dump at current address\n"
+        L"  mXXXXXX, memory XXXXXX  Memory dump at address XXXXXX\n"
+        L"  memory bytes XXXXXX  Memory dump at address XXXXXX, byte granularity\n"
         L"  b              List all breakpoints\n"
         L"  bXXXXXX        Set breakpoint at address XXXXXX\n"
         L"  bc             Remove all breakpoints\n"
         L"  bcXXXXXX       Remove breakpoint at address XXXXXX\n"
-        L"  u              Save memory dump to file memdump.bin\n"
+        L"  mo, monitor    Type M O / Enter (BASIC) or P SPACE M / Enter (FOCAL) to exit to Monitor\n"
+        L"  memsave [FILE] Save memory dump as FILE; default memdump.bin\n"
+        L"  loadbin FILE   Load a .bin file (tape image: start addr + size + data) into RAM\n"
+        L"  statesave FILE Save full emulator state (memory, registers, ports) to FILE\n"
+        L"  stateload FILE Load full emulator state from FILE\n"
         L"  screen [FILE]  Save black/white screenshot as FILE (PNG); default filename from timestamp\n"
         L"  screenc [FILE] Save color screenshot as FILE (PNG); default filename from timestamp\n"
         L"  q, quit, exit  Quit the debugger\n";
@@ -269,6 +370,41 @@ void CmdPrintAllRegisters(const ConsoleCommandParams& /*params*/)
                 << L" C=" << pProc->GetC()
                 << L" T=" << ((pProc->GetPSW() & PSW_T) != 0 ? 1 : 0)
                 << L"]" << std::endl;
+}
+
+// Print one extended (I/O port) register line: address, value, label.
+// Address is printed as given (some labels intentionally share a printed
+// address while reading distinct underlying state via a different
+// PORTVIEW_xxx selector -- e.g. "keyb data" and "palette" both show 177662).
+void PrintPortRegisterLine(uint16_t printedAddress, uint16_t portViewSelector, LPCTSTR label)
+{
+    TCHAR bufAddr[7];
+    PrintOctalValue(bufAddr, printedAddress);
+    TCHAR bufValue[7];
+    PrintOctalValue(bufValue, g_pBoard->GetPortView(portViewSelector));
+    std::wcout << bufAddr << L" " << bufValue << L" " << label << std::endl;
+}
+
+void CmdPrintExtendedRegisters(const ConsoleCommandParams& /*params*/)
+{
+    PrintPortRegisterLine(0177660, PORTVIEW_KEYBSTATUS,   _T("keyb state"));
+    PrintPortRegisterLine(0177662, PORTVIEW_KEYBDATA,     _T("keyb data"));
+    PrintPortRegisterLine(0177662, PORTVIEW_PALETTE,      _T("palette"));
+    PrintPortRegisterLine(0177664, PORTVIEW_SCROLL,       _T("scroll"));
+    PrintPortRegisterLine(0177706, PORTVIEW_TIMERREL,     _T("timer rel"));
+    PrintPortRegisterLine(0177710, PORTVIEW_TIMERVAL,     _T("timer val"));
+    PrintPortRegisterLine(0177712, PORTVIEW_TIMERCTL,     _T("timer ctl"));
+    PrintPortRegisterLine(0177714, PORTVIEW_PARALLELIN,   _T("parallel in"));
+    PrintPortRegisterLine(0177714, PORTVIEW_PARALLELOUT,  _T("parallel out"));
+    PrintPortRegisterLine(0177716, PORTVIEW_SYSTEM,       _T("system"));
+    PrintPortRegisterLine(0177716, PORTVIEW_SYSTEMMEM,    _T("system mem"));
+    PrintPortRegisterLine(0177716, PORTVIEW_SYSTEMTAP,    _T("system tape"));
+
+    if ((g_nEmulatorConfiguration & BK_COPT_FDD) != 0)
+    {
+        PrintPortRegisterLine(0177130, PORTVIEW_FDDSTATE, _T("floppy state"));
+        PrintPortRegisterLine(0177132, PORTVIEW_FDDDATA,  _T("floppy data"));
+    }
 }
 
 void CmdPrintRegister(const ConsoleCommandParams& params)
@@ -351,10 +487,40 @@ void CmdPrintDisassembleAtAddress(const ConsoleCommandParams& params)
     PrintDisassemble(pProc, address, false, okShort);
 }
 
-void CmdSaveMemoryDump(const ConsoleCommandParams& /*params*/)
+void CmdSaveMemoryDump(const ConsoleCommandParams& params)
 {
-    if (!SaveMemoryDump())
-        std::wcout << L" Failed to save memory dump." << std::endl;
+    std::wstring filename = params.paramFilename.empty() ? L"memdump.bin" : params.paramFilename;
+    if (SaveMemoryDump(filename))
+        std::wcout << L"Saved memory dump " << filename << std::endl;
+    else
+        std::wcout << L"FAILED to save memory dump " << filename << std::endl;
+}
+
+void CmdLoadBin(const ConsoleCommandParams& params)
+{
+    std::wstring error = LoadBin(params.paramFilename);
+    if (error.empty())
+        std::wcout << L"Loaded " << params.paramFilename << std::endl;
+    else
+        std::wcout << L"FAILED to load " << params.paramFilename << L": " << error << std::endl;
+}
+
+void CmdStateSave(const ConsoleCommandParams& params)
+{
+    std::string filename = WStringToNarrowString(params.paramFilename);
+    if (Emulator_SaveImage(filename))
+        std::wcout << L"Saved state " << params.paramFilename << std::endl;
+    else
+        std::wcout << L"FAILED to save state " << params.paramFilename << std::endl;
+}
+
+void CmdStateLoad(const ConsoleCommandParams& params)
+{
+    std::string filename = WStringToNarrowString(params.paramFilename);
+    if (Emulator_LoadImage(filename))
+        std::wcout << L"Loaded state " << params.paramFilename << std::endl;
+    else
+        std::wcout << L"FAILED to load state " << params.paramFilename << std::endl;
 }
 
 void CmdScreenshot(const ConsoleCommandParams& params)
@@ -400,6 +566,13 @@ void CmdPrintMemoryDumpAtAddress(const ConsoleCommandParams& params)
     uint16_t address = params.paramOct1;
     CProcessor* pProc = GetCurrentProcessor();
     PrintMemoryDump(pProc, address);
+}
+
+void CmdPrintMemoryDumpBytesAtAddress(const ConsoleCommandParams& params)
+{
+    uint16_t address = params.paramOct1;
+    CProcessor* pProc = GetCurrentProcessor();
+    PrintMemoryDumpBytes(pProc, address);
 }
 
 // Run until a breakpoint is hit, or until maxFrames frames have been run.
@@ -571,6 +744,7 @@ enum ConsoleCommandArgInfo
     ARGINFO_NONE,       // No parameters
     ARGINFO_REG,        // Register number 0..7
     ARGINFO_OCT,        // Octal value
+    ARGINFO_DEC,        // Decimal value
     ARGINFO_REG_OCT,    // Register number, octal value
     ARGINFO_FILENAME,       // A space then a filename (rest of the line, verbatim)
     ARGINFO_OPT_FILENAME,   // Optional: either bare command, or space + filename
@@ -587,6 +761,8 @@ struct ConsoleCommandStruct
 
 const ConsoleCommandStruct ConsoleCommands[] =
 {
+    { L"?",     ARGINFO_NONE,    CmdShowHelp },
+    { L"help",  ARGINFO_NONE,    CmdShowHelp },
     { L"h",     ARGINFO_NONE,    CmdShowHelp },
 
     { L"r",     ARGINFO_REG_OCT, CmdSetRegisterValue },          // rN=XXXXXX
@@ -594,6 +770,7 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"rps=",  ARGINFO_OCT,     CmdSetRegisterPSW },             // rps=XXXXXX
     { L"rps ",  ARGINFO_OCT,     CmdSetRegisterPSW },             // rps XXXXXX
     { L"rps",   ARGINFO_NONE,    CmdPrintRegisterPSW },           // rps
+    { L"regs ext", ARGINFO_NONE,  CmdPrintExtendedRegisters },     // regs ext
     { L"regs",  ARGINFO_NONE,    CmdPrintAllRegisters },          // regs
     { L"r",     ARGINFO_NONE,    CmdPrintAllRegisters },          // r
 
@@ -604,25 +781,31 @@ const ConsoleCommandStruct ConsoleCommands[] =
 
     { L"reset", ARGINFO_NONE,    CmdReset },
 
+    { L"disasm ", ARGINFO_OCT,   CmdPrintDisassembleAtAddress }, // disasm XXXXXX
+    { L"disasm",  ARGINFO_NONE,  CmdPrintDisassembleAtPC },      // disasm
     { L"d",     ARGINFO_OCT,     CmdPrintDisassembleAtAddress },  // dXXXXXX
     { L"D",     ARGINFO_OCT,     CmdPrintDisassembleAtAddress },  // DXXXXXX
     { L"d",     ARGINFO_NONE,    CmdPrintDisassembleAtPC },       // d
     { L"D",     ARGINFO_NONE,    CmdPrintDisassembleAtPC },       // D
 
-    { L"u",     ARGINFO_NONE,    CmdSaveMemoryDump },
+    { L"memsave", ARGINFO_OPT_FILENAME, CmdSaveMemoryDump },        // memsave [FILE]
+    { L"loadbin", ARGINFO_FILENAME,     CmdLoadBin },                // loadbin FILENAME
+    { L"statesave", ARGINFO_FILENAME,   CmdStateSave },              // statesave FILENAME
+    { L"stateload", ARGINFO_FILENAME,   CmdStateLoad },              // stateload FILENAME
 
     { L"screenc", ARGINFO_OPT_FILENAME, CmdScreenshot },
     { L"screen",  ARGINFO_OPT_FILENAME, CmdScreenshot },
 
     { L"monitor", ARGINFO_NONE,   CmdGotoMonitor },
     { L"mo",      ARGINFO_NONE,   CmdGotoMonitor },
-    { L"memory",  ARGINFO_OCT,    CmdPrintMemoryDumpAtAddress },  // memory XXXXXX
+    { L"memory bytes ", ARGINFO_OCT, CmdPrintMemoryDumpBytesAtAddress }, // memory bytes XXXXXX
+    { L"memory ", ARGINFO_OCT,   CmdPrintMemoryDumpAtAddress },  // memory XXXXXX
     { L"memory",  ARGINFO_NONE,   CmdPrintMemoryDumpAtPC },       // memory
     { L"m",       ARGINFO_OCT,    CmdPrintMemoryDumpAtAddress },  // mXXXXXX
     { L"m",       ARGINFO_NONE,   CmdPrintMemoryDumpAtPC },       // m
 
-    { L"go frames ", ARGINFO_OCT,  CmdRunFrames },                  // go frames N
-    { L"go",    ARGINFO_OCT,     CmdRunToAddress },               // goXXXXXX
+    { L"go frames ", ARGINFO_DEC,  CmdRunFrames },                  // go frames N (decimal)
+    { L"go ",   ARGINFO_OCT,     CmdRunToAddress },               // go XXXXXX
     { L"go",    ARGINFO_NONE,    CmdRun },                        // go
     { L"g",     ARGINFO_OCT,     CmdRunToAddress },               // gXXXXXX
     { L"g",     ARGINFO_NONE,    CmdRun },                        // g
@@ -667,6 +850,22 @@ bool MatchCommand(const std::wstring& command, const ConsoleCommandStruct& cmd, 
             for (wchar_t ch : rest)
                 value = (uint16_t)((value << 3) + (ch - L'0'));
             params.paramOct1 = value;
+            return true;
+        }
+
+    case ARGINFO_DEC:
+        {
+            if (rest.empty())
+                return false;
+            for (wchar_t ch : rest)
+                if (ch < L'0' || ch > L'9') return false;
+            uint32_t value = 0;
+            for (wchar_t ch : rest)
+            {
+                value = value * 10 + (uint32_t)(ch - L'0');
+                if (value > 0xffff) value = 0xffff;  // clamp, paramOct1 is 16-bit
+            }
+            params.paramOct1 = (uint16_t)value;
             return true;
         }
 

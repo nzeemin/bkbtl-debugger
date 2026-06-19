@@ -179,7 +179,7 @@ bool PngFile_WriteImageData8(FILE * fpFile, uint32_t framenum, const uint32_t* p
 
         uint8_t * pline = pdst;
         *(pdst++) = 0;  // additional "filter-type" byte at the beginning of every scanline
-        const uint32_t * psrc = pBits + ((screenHeight - 1 - line) * screenWidth);
+        const uint32_t * psrc = pBits + (line * screenWidth);
         for (int i = 0; i < screenWidth; i++)
         {
             uint32_t rgb = *(psrc++);
