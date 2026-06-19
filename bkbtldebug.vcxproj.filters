@@ -45,6 +45,9 @@
     <ClCompile Include="emubase\SoundAY.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="util\BitmapFile.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="stdafx.h">
@@ -72,6 +75,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="emubase\Processor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="util\BitmapFile.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

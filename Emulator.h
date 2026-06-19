@@ -20,6 +20,9 @@ extern uint16_t g_wEmulatorPrevCpuPC;  // Previous PC value
 extern uint16_t g_wEmulatorPpuPC;      // Current PC value
 extern uint16_t g_wEmulatorPrevPpuPC;  // Previous PC value
 
+extern const uint32_t ScreenView_BWPalette[4];
+extern const uint32_t ScreenView_ColorPalette[4];
+
 
 //////////////////////////////////////////////////////////////////////
 

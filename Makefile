@@ -26,7 +26,8 @@ SRCS := \
 	emubase/Disasm.cpp \
 	emubase/Floppy.cpp \
 	emubase/Processor.cpp \
-	emubase/SoundAY.cpp
+	emubase/SoundAY.cpp \
+	util/BitmapFile.cpp
 
 INCLUDES := -I.
 
