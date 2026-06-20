@@ -1082,8 +1082,8 @@ void CMotherboard::SetPortWord(uint16_t address, uint16_t word)
 //  Offset Length
 //       0     32 bytes  - Header
 //      32    128 bytes  - Board status
-//     160     32 bytes  - CPU status
-//     192   3904 bytes  - RESERVED
+//     160     64 bytes  - CPU status
+//     224   3872 bytes  - RESERVED
 //    4096  65536 bytes  - ROM image 64K
 //   69632 131072 bytes  - RAM image 128K
 //  200704     --        - END
@@ -1127,7 +1127,7 @@ void CMotherboard::LoadFromImage(const uint8_t* pImage)
 {
     // Board data
     const uint16_t* pwImage = reinterpret_cast<const uint16_t*>(pImage + 32);
-    m_Configuration = *pwImage++;
+    m_Configuration = *pwImage++; //TODO: call SetConfiguration() instead
     pwImage += 6;  // RESERVED
     m_Port177560 = *pwImage++;
     m_Port177562 = *pwImage++;

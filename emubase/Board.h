@@ -73,7 +73,7 @@ enum BKConfiguration
 #define BKIMAGE_SIZE 200704
 #define BKIMAGE_HEADER1 0x30304B41  // "BK00"
 #define BKIMAGE_HEADER2 0x214C5442  // "BTL!"
-#define BKIMAGE_VERSION 0x00010000  // 1.0
+#define BKIMAGE_VERSION 0x00010001  // 1.1
 
 
 //////////////////////////////////////////////////////////////////////
