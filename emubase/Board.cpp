@@ -923,6 +923,18 @@ uint16_t CMotherboard::GetPortView(uint16_t address) const
         if (m_pFloppyCtl != nullptr)
             return m_pFloppyCtl->GetDataView();
         return 0;
+    case PORTVIEW_FDDDRIVE:
+        if (m_pFloppyCtl != nullptr)
+            return m_pFloppyCtl->GetDriveView();
+        return 0xFFFF;
+    case PORTVIEW_FDDTRACK:
+        if (m_pFloppyCtl != nullptr)
+            return m_pFloppyCtl->GetTrackView();
+        return 0xFFFF;
+    case PORTVIEW_FDDSIDE:
+        if (m_pFloppyCtl != nullptr)
+            return m_pFloppyCtl->GetSideView();
+        return 0xFFFF;
 
     default:
         return 0;

@@ -116,6 +116,9 @@ enum BKConfiguration
 #define PORTVIEW_SYSTEMTAP      0177721
 #define PORTVIEW_FDDSTATE       0177130
 #define PORTVIEW_FDDDATA        0177132
+#define PORTVIEW_FDDDRIVE       0000133  // Drive number: from 0 to 3; -1 if not selected
+#define PORTVIEW_FDDTRACK       0000134  // Track number: from 0 to 79
+#define PORTVIEW_FDDSIDE        0000135  // Disk side: 0 or 1
 
 // Tape emulator callback used to read a tape recorded data.
 // Input:

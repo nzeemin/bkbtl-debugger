@@ -37,7 +37,7 @@ CProcessor* GetCurrentProcessor()
 }
 
 // Forward declaration: RunUntilBreakpoint is defined further down (near the
-// "go" commands) but is also used by CmdStepOver defined before it.
+// "continue" commands) but is also used by CmdStepOver defined before it.
 void RunUntilBreakpoint(int maxFrames = 3000);
 
 // Print register name, octal value and binary value -- one line
@@ -337,7 +337,15 @@ struct ConsoleCommandParams
     uint16_t paramOct1 = 0;
     uint16_t paramOct2 = 0;
     std::wstring paramFilename;
+    uint32_t paramFlags = 0;     // Modifier postfix flags, see EXAMFLAG_xxx
+    bool paramHasAddress = false; // Whether an explicit address was given (vs PC default)
 };
+
+// Modifier postfixes for "examine"/"x": any combination, any order, e.g.
+// "examine bytes hex", "x100260 hex nochars", "x bytes".
+const uint32_t EXAMFLAG_BYTES    = 0x01;  // Byte granularity instead of word
+const uint32_t EXAMFLAG_HEX      = 0x02;  // Hexadecimal instead of octal
+const uint32_t EXAMFLAG_NOCHARS  = 0x04;  // Hide the trailing ASCII/character column
 
 //////////////////////////////////////////////////////////////////////
 // Console command handlers
@@ -349,13 +357,14 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"Console command list:\n"
         L"  h, help, ?     Show this help\n"
         L"  reset          Reset the machine\n"
-        L"  g, go          Go; free run\n"
-        L"  gXXXXXX, go XXXXXX  Go; run and stop at address XXXXXX\n"
-        L"  go frames N    Go; run for N frames, decimal (1 sec = 25 frames)\n"
+        L"  c, continue    Continue; free run\n"
+        L"  cXXXXXX, continue XXXXXX  Continue; run and stop at address XXXXXX\n"
+        L"  continue frames N  Continue; run for N frames, decimal (1 sec = 25 frames)\n"
         L"  s, step        Step Into; executes one instruction\n"
-        L"  so, stepover   Step Over; executes and stops after the current instruction\n"
+        L"  n, next        Step Over (Next); executes and stops after the current instruction\n"
         L"  r, regs        Show register values\n"
         L"  regs ext       Show extended (I/O port) registers\n"
+        L"  regs floppy    Show floppy controller registers and state\n"
         L"  status         Show machine status: uptime, floppy drives\n"
         L"  rN             Show value of register N; N=0..7\n"
         L"  rN=XXXXXX      Set register N to value XXXXXX; N=0..7\n"
@@ -367,9 +376,9 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  rsp=XXXXXX     Set SP to value XXXXXX\n"
         L"  d, disasm      Disassemble from PC; use D for short format\n"
         L"  dXXXXXX, disasm XXXXXX  Disassemble from address XXXXXX\n"
-        L"  m, memory      Memory dump at current address\n"
-        L"  mXXXXXX, memory XXXXXX  Memory dump at address XXXXXX\n"
-        L"  memory bytes XXXXXX  Memory dump at address XXXXXX, byte granularity\n"
+        L"  x, examine     Examine memory at current address\n"
+        L"  xXXXXX, examine XXXXXX  Examine memory at address XXXXXX\n"
+        L"  examine bytes XXXXXX  Examine memory at address XXXXXX, byte granularity\n"
         L"  b              List all breakpoints\n"
         L"  bXXXXXX        Set breakpoint at address XXXXXX\n"
         L"  bc             Remove all breakpoints\n"
@@ -468,6 +477,69 @@ void CmdPrintExtendedRegisters(const ConsoleCommandParams& /*params*/)
     }
 }
 
+// Print "Floppy engine: ON/off" and the per-drive attach/read-only list.
+// Caller must have already checked BK_COPT_FDD.
+// okMarkSelected: append "(selected)" to the currently selected drive's
+// line (used by "regs floppy"; "status" doesn't show this).
+void PrintFloppyEngineAndDrives(bool okMarkSelected)
+{
+    std::wcout << L"Floppy engine: " << (Emulator_IsFloppyEngineOn() ? L"ON" : L"off") << std::endl;
+
+    int selectedDrive = -1;
+    if (okMarkSelected)
+    {
+        uint16_t driveValue = g_pBoard->GetPortView(PORTVIEW_FDDDRIVE);
+        if (driveValue != 0xFFFF)
+            selectedDrive = driveValue;
+    }
+
+    for (int slot = 0; slot < 4; slot++)
+    {
+        wchar_t letter = (wchar_t)(L'A' + slot);
+        bool okAttached = Emulator_IsFloppyImageAttached(slot);
+        std::wcout << L"  disk" << letter << L": ";
+        if (okAttached)
+        {
+            std::wcout << L"attached"
+                        << (Emulator_IsFloppyReadOnly(slot) ? L", read-only" : L", read-write");
+        }
+        else
+        {
+            std::wcout << L"not attached";
+        }
+        if (slot == selectedDrive)
+            std::wcout << L" (selected)";
+        std::wcout << std::endl;
+    }
+}
+
+void CmdPrintFloppyRegisters(const ConsoleCommandParams& /*params*/)
+{
+    if ((g_nEmulatorConfiguration & BK_COPT_FDD) == 0)
+    {
+        std::wcout << L" Current configuration has no floppy controller." << std::endl;
+        return;
+    }
+
+    PrintFloppyEngineAndDrives(true);
+
+    PrintPortRegisterLine(0177130, PORTVIEW_FDDSTATE, _T("floppy state"));
+    PrintPortRegisterLine(0177132, PORTVIEW_FDDDATA,  _T("floppy data"));
+
+    // Track/side are internal controller state, not memory-mapped ports --
+    // there's no real address for them -- but GetPortView() is still the
+    // debugger access path used for everything else above, so they go
+    // through it too. Printed without an address column to avoid implying
+    // they live at some address.
+    TCHAR bufTrack[7];
+    PrintOctalValue(bufTrack, g_pBoard->GetPortView(PORTVIEW_FDDTRACK));
+    std::wcout << L"       " << bufTrack << L" track" << std::endl;
+
+    TCHAR bufSide[7];
+    PrintOctalValue(bufSide, g_pBoard->GetPortView(PORTVIEW_FDDSIDE));
+    std::wcout << L"       " << bufSide << L" side" << std::endl;
+}
+
 void CmdShowStatus(const ConsoleCommandParams& /*params*/)
 {
     float uptime = Emulator_GetUptime();
@@ -475,23 +547,7 @@ void CmdShowStatus(const ConsoleCommandParams& /*params*/)
 
     if ((g_nEmulatorConfiguration & BK_COPT_FDD) != 0)
     {
-        std::wcout << L"Floppy engine: " << (Emulator_IsFloppyEngineOn() ? L"ON" : L"off") << std::endl;
-        for (int slot = 0; slot < 4; slot++)
-        {
-            wchar_t letter = (wchar_t)(L'A' + slot);
-            bool okAttached = Emulator_IsFloppyImageAttached(slot);
-            std::wcout << L"  disk" << letter << L": ";
-            if (okAttached)
-            {
-                std::wcout << L"attached"
-                            << (Emulator_IsFloppyReadOnly(slot) ? L", read-only" : L", read-write");
-            }
-            else
-            {
-                std::wcout << L"not attached";
-            }
-            std::wcout << std::endl;
-        }
+        PrintFloppyEngineAndDrives(false);
     }
 }
 
@@ -721,8 +777,8 @@ void CmdPrintMemoryDumpBytesAtAddress(const ConsoleCommandParams& params)
 
 // Run until a breakpoint is hit, or until maxFrames frames have been run.
 // Since this console has no message loop / timer driving frames the way the
-// GUI build does, "go" here just drives Emulator_SystemFrame() in a blocking
-// loop until it reports a breakpoint.
+// GUI build does, "continue" here just drives Emulator_SystemFrame() in a
+// blocking loop until it reports a breakpoint.
 //
 // Safety valve: there is no way to interrupt this from another thread (no
 // GUI Stop button, no Ctrl+C handler), so a free run with no breakpoint
@@ -929,6 +985,7 @@ enum ConsoleCommandArgInfo
     ARGINFO_REG_OCT,    // Register number, octal value
     ARGINFO_FILENAME,       // A space then a filename (rest of the line, verbatim)
     ARGINFO_OPT_FILENAME,   // Optional: either bare command, or space + filename
+    ARGINFO_OCT_MODIFIERS,  // Optional address, then any combination of postfix modifiers
 };
 
 typedef void (*CONSOLE_COMMAND_CALLBACK)(const ConsoleCommandParams& params);
@@ -958,12 +1015,13 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"rsp ",  ARGINFO_OCT,     CmdSetRegisterSP },              // rsp XXXXXX
     { L"rsp",   ARGINFO_NONE,    CmdPrintRegisterSP },            // rsp
     { L"regs ext", ARGINFO_NONE,  CmdPrintExtendedRegisters },     // regs ext
+    { L"regs floppy", ARGINFO_NONE, CmdPrintFloppyRegisters },     // regs floppy
     { L"status",   ARGINFO_NONE,  CmdShowStatus },                 // status
     { L"regs",  ARGINFO_NONE,    CmdPrintAllRegisters },          // regs
     { L"r",     ARGINFO_NONE,    CmdPrintAllRegisters },          // r
 
-    { L"stepover", ARGINFO_NONE,    CmdStepOver },
-    { L"so",      ARGINFO_NONE,    CmdStepOver },
+    { L"next",    ARGINFO_NONE,    CmdStepOver },
+    { L"n",       ARGINFO_NONE,    CmdStepOver },
     { L"step",    ARGINFO_NONE,    CmdStepInto },
     { L"s",       ARGINFO_NONE,    CmdStepInto },
 
@@ -1001,17 +1059,17 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"t",     ARGINFO_OCT,     CmdTraceLogWithMask },           // tXXXXXX
     { L"trace", ARGINFO_NONE,    CmdTraceLogOnOff },              // trace
     { L"t",     ARGINFO_NONE,    CmdTraceLogOnOff },              // t
-    { L"memory bytes ", ARGINFO_OCT, CmdPrintMemoryDumpBytesAtAddress }, // memory bytes XXXXXX
-    { L"memory ", ARGINFO_OCT,   CmdPrintMemoryDumpAtAddress },  // memory XXXXXX
-    { L"memory",  ARGINFO_NONE,   CmdPrintMemoryDumpAtPC },       // memory
-    { L"m",       ARGINFO_OCT,    CmdPrintMemoryDumpAtAddress },  // mXXXXXX
-    { L"m",       ARGINFO_NONE,   CmdPrintMemoryDumpAtPC },       // m
+    { L"examine bytes ", ARGINFO_OCT, CmdPrintMemoryDumpBytesAtAddress }, // examine bytes XXXXXX
+    { L"examine ", ARGINFO_OCT,  CmdPrintMemoryDumpAtAddress },  // examine XXXXXX
+    { L"examine",  ARGINFO_NONE, CmdPrintMemoryDumpAtPC },       // examine
+    { L"x",       ARGINFO_OCT,    CmdPrintMemoryDumpAtAddress },  // xXXXXX
+    { L"x",       ARGINFO_NONE,   CmdPrintMemoryDumpAtPC },       // x
 
-    { L"go frames ", ARGINFO_DEC,  CmdRunFrames },                  // go frames N (decimal)
-    { L"go ",   ARGINFO_OCT,     CmdRunToAddress },               // go XXXXXX
-    { L"go",    ARGINFO_NONE,    CmdRun },                        // go
-    { L"g",     ARGINFO_OCT,     CmdRunToAddress },               // gXXXXXX
-    { L"g",     ARGINFO_NONE,    CmdRun },                        // g
+    { L"continue frames ", ARGINFO_DEC, CmdRunFrames },             // continue frames N (decimal)
+    { L"continue ", ARGINFO_OCT, CmdRunToAddress },                 // continue XXXXXX
+    { L"continue",  ARGINFO_NONE, CmdRun },                         // continue
+    { L"c",     ARGINFO_OCT,     CmdRunToAddress },                 // cXXXXXX
+    { L"c",     ARGINFO_NONE,    CmdRun },                          // c
 
     { L"bc",    ARGINFO_OCT,     CmdRemoveBreakpointAtAddress },  // bcXXXXXX
     { L"bc",    ARGINFO_NONE,    CmdRemoveAllBreakpoints },       // bc
@@ -1114,6 +1172,66 @@ bool MatchCommand(const std::wstring& command, const ConsoleCommandStruct& cmd, 
                 return false;
             params.paramFilename = rest.substr(1);
             return !params.paramFilename.empty();
+        }
+
+    case ARGINFO_OCT_MODIFIERS:
+        {
+            // Optional address -- either glued directly to the prefix
+            // ("x100260") or separated by one space ("x 100260") -- then
+            // zero or more space-separated modifier words in any
+            // order/combination ("bytes", "hex", "nochars"), e.g.:
+            //   "x", "x100260", "x hex", "x100260 bytes hex nochars",
+            //   "x 100260 bytes hex nochars"
+            size_t pos = 0;
+
+            // Peek at the first token, whether glued (no leading space) or
+            // separated by one space, and check if it's a genuine octal
+            // address before committing to consuming it -- "x bytes" must
+            // NOT mistake the leading space for "address then modifiers"
+            // when there's no address at all.
+            size_t addrStart = (pos < rest.size() && rest[pos] == L' ') ? pos + 1 : pos;
+            size_t addrEnd = rest.find(L' ', addrStart);
+            std::wstring addrToken = (addrEnd == std::wstring::npos) ? rest.substr(addrStart) : rest.substr(addrStart, addrEnd - addrStart);
+
+            bool okAddrToken = !addrToken.empty();
+            for (wchar_t ch : addrToken)
+                if (ch < L'0' || ch > L'7') { okAddrToken = false; break; }
+
+            if (okAddrToken)
+            {
+                uint16_t value = 0;
+                for (wchar_t ch : addrToken)
+                    value = (uint16_t)((value << 3) + (ch - L'0'));
+                params.paramOct1 = value;
+                params.paramHasAddress = true;
+                pos = addrStart + addrToken.size();
+            }
+            // else: no valid address present: leave pos at 0, so the
+            // modifier loop below sees any leading space and token itself.
+
+            // Remaining modifier words, space-separated, any order.
+            while (pos < rest.size())
+            {
+                if (rest[pos] != L' ')
+                    return false;
+                pos++;  // skip the space
+                size_t wordEnd = rest.find(L' ', pos);
+                std::wstring word = (wordEnd == std::wstring::npos) ? rest.substr(pos) : rest.substr(pos, wordEnd - pos);
+                if (word.empty())
+                    return false;  // double space or trailing space -- reject rather than silently ignore
+
+                if (word == L"bytes")
+                    params.paramFlags |= EXAMFLAG_BYTES;
+                else if (word == L"hex")
+                    params.paramFlags |= EXAMFLAG_HEX;
+                else if (word == L"nochars")
+                    params.paramFlags |= EXAMFLAG_NOCHARS;
+                else
+                    return false;  // Unknown modifier word
+
+                pos = (wordEnd == std::wstring::npos) ? rest.size() : wordEnd;
+            }
+            return true;
         }
     }
     return false;
