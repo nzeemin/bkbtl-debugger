@@ -57,7 +57,11 @@ If a ROM is missing, the debugger reports which one and exits cleanly rather tha
 ```sh
 ./bkbtldebug                          # default configuration: BK-0010-BASIC
 ./bkbtldebug conf:BK-0011M-FDD        # pick a configuration explicitly
+./bkbtldebug --romdir /path/to/roms   # look for .rom files there instead of the current directory
 ```
+
+`--romdir DIR` takes a separate argument (not `--romdir=DIR`) and can be combined with `conf:NAME`
+in either order. If a ROM still can't be found, the debugger reports the exact path it tried.
 
 Available configuration names (`conf:NAME`, case-insensitive):
 
@@ -83,13 +87,16 @@ Use 'h' command to show help.
 Attached diskA: rt11.img
 140000> continue frames 750
  Stopped at 162646
-162646> status
-Uptime: 30.00 sec
+162646> i floppy
 Floppy engine: ON
   diskA: attached, read-write (selected)
   diskB: not attached
   diskC: not attached
   diskD: not attached
+177130 040202 floppy state
+177132 000400 floppy data
+       000006 track
+       000001 side
 162646> screenc boot.png
 Saved screenshot boot.png
 ```
@@ -103,6 +110,12 @@ Single-letter commands never take a space before their argument (`d100260`, `r0=
 commands always do (`disasm 100260`, `continue frames 10`). Numeric arguments are octal
 throughout, **except** the frame count in `continue frames N`, which is decimal.
 
+Commands that change state (registers, breakpoints, reset, file/disk operations) print a short
+confirmation line. `disasm`/`d`/`D` and `examine`/`x` page their output 8 lines at a time: after
+a page, the prompt becomes `-- more (Enter to continue) --`; pressing Enter shows the next page
+at the same address/format/modifiers, and any other input just cancels paging (that input is
+discarded, not run as a command) and returns to the normal prompt.
+
 ### Help
 
 | Command | Description |
@@ -114,7 +127,7 @@ throughout, **except** the frame count in `continue frames N`, which is decimal.
 
 | Command | Description |
 |---|---|
-| `reset` | Reset the machine |
+| `reset` | Reset the machine; confirms with `Reset.` |
 | `c`, `continue` | Continue; free run (gives up after 3000 frames if no breakpoint is hit) |
 | `cXXXXXX`, `continue XXXXXX` | Continue; run and stop at address `XXXXXX` |
 | `continue frames N` | Continue; run for exactly `N` frames (decimal; 25 frames = 1 second) |
@@ -126,10 +139,10 @@ throughout, **except** the frame count in `continue frames N`, which is decimal.
 | Command | Description |
 |---|---|
 | `r`, `regs` | Show all registers and PSW flags, one compact line |
-| `regs ext` | Show extended (I/O port) registers: keyboard, palette, scroll, timer, parallel port, system register |
-| `regs floppy` | Show floppy engine state, per-drive attach status, and floppy controller registers/track/side |
+| `r ext`, `regs ext` | Show extended (I/O port) registers: keyboard, palette, scroll, timer, parallel port, system register |
+| `i floppy`, `info floppy` | Show floppy engine state, per-drive attach status, and floppy controller registers/track/side |
 | `rN` | Show register `N` (0-5), octal + binary |
-| `rN=XXXXXX` | Set register `N` to `XXXXXX` |
+| `rN=XXXXXX` | Set register `N` to `XXXXXX`; confirms with `RN set to XXXXXX` |
 | `rps` / `rps=XXXXXX` | Show / set the processor status word |
 | `rpc` / `rpc=XXXXXX` | Show / set PC |
 | `rsp` / `rsp=XXXXXX` | Show / set SP |
@@ -138,30 +151,36 @@ throughout, **except** the frame count in `continue frames N`, which is decimal.
 
 | Command | Description |
 |---|---|
-| `d`, `disasm` | Disassemble from PC |
+| `d`, `disasm` | Disassemble from PC (paged) |
 | `D` | Disassemble from PC, short format (no raw opcode words) |
 | `dXXXXXX`, `disasm XXXXXX` | Disassemble from address `XXXXXX` |
-| `x`, `examine` | Examine memory (word granularity) at PC |
+| `x`, `examine` | Examine memory at PC (paged) |
 | `xXXXXX`, `examine XXXXXX` | Examine memory at address `XXXXXX` |
-| `examine bytes XXXXXX` | Same, byte granularity (3-digit octal per byte) |
+| `... bytes` | Modifier: byte granularity instead of words |
+| `... hex` | Modifier: hexadecimal (uppercase `A`-`F`) instead of octal |
+| `... nochars` | Modifier: hide the trailing ASCII/character column |
+
+Modifiers go after the address, in any order, e.g. `x100260 bytes hex` or `examine hex nochars`.
+Values that changed since the last step/run are highlighted (in a terminal that supports color;
+suppressed automatically otherwise).
 
 ### Breakpoints
 
 | Command | Description |
 |---|---|
 | `b` | List all breakpoints |
-| `bXXXXXX` | Set a breakpoint at `XXXXXX` |
-| `bc` | Remove all breakpoints |
-| `bcXXXXXX` | Remove the breakpoint at `XXXXXX` |
+| `bXXXXXX` | Set a breakpoint at `XXXXXX`; confirms with `Breakpoint set at XXXXXX` |
+| `bc` | Remove all breakpoints; confirms with `All breakpoints removed.` |
+| `bcXXXXXX` | Remove the breakpoint at `XXXXXX`; confirms with `Breakpoint removed at XXXXXX` |
 
 ### Status and tracing
 
 | Command | Description |
 |---|---|
-| `status` | Show uptime and (if the configuration has a floppy controller) drive status |
+| `i`, `info` | Show uptime and (if the configuration has a floppy controller) drive status |
 | `t`, `trace` | Toggle instruction tracing to `trace.log` on/off |
 | `tXXXXXX`, `trace XXXXXX` | Set the trace mask explicitly (see `TRACE_xxx` in `emubase/Board.h`) |
-| `tc` | Clear `trace.log` |
+| `tc`, `t clear`, `trace clear` | Clear `trace.log` |
 | `mo`, `monitor` | Type `M` `O` `Enter` (BASIC) or `P` `SPACE` `M` `Enter` (FOCAL) to exit to the monitor |
 
 Tracing only captures execution driven by `continue`/`c` (and the run-to-breakpoint path of
@@ -175,8 +194,8 @@ output.
 | `memsave [FILE]` | Save a full 64K memory dump (default `memdump.bin`) |
 | `loadbin FILE` | Load a classic BK `.bin` tape image (2-word header: start address, byte count) into RAM |
 | `statesave FILE` / `stateload FILE` | Save / load full emulator state — memory, registers, ports |
-| `diskN attach FILE` | Attach a floppy image to drive `N` (`A`-`D`) |
-| `diskN detach` | Detach the floppy image from drive `N` |
+| `diskN attach FILE`, `diskN a FILE` | Attach a floppy image to drive `N` (`A`-`D`) |
+| `diskN detach`, `diskN d` | Detach the floppy image from drive `N` |
 | `screen [FILE]` | Save a black-and-white screenshot as PNG (default filename: timestamp) |
 | `screenc [FILE]` | Save a color screenshot as PNG |
 

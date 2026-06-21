@@ -11,6 +11,10 @@ const int MAX_BREAKPOINTCOUNT = 16;
 
 extern CMotherboard* g_pBoard;
 extern BKConfiguration g_nEmulatorConfiguration;  // Current configuration
+
+// Directory to look for .rom files in, set via the --romdir command-line
+// option. Empty means "current directory" (the historical behavior).
+extern std::string g_strRomDirectory;
 extern bool g_okEmulatorRunning;
 
 extern uint8_t* g_pEmulatorRam;  // RAM values - for change tracking

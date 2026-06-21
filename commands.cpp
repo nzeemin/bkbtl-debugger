@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <chrono>
+#include <type_traits>
 #include "bkbtldebug.h"
 #include "commands.h"
 #include "Emulator.h"
@@ -30,6 +31,46 @@
 const wchar_t* const MESSAGE_UNKNOWN_COMMAND  = L" Unknown command.";
 const wchar_t* const MESSAGE_INVALID_REGNUM   = L" Invalid register number, 0..7 expected.";
 const wchar_t* const MESSAGE_WRONG_VALUE      = L" Wrong value.";
+
+// Modifier postfixes for "examine"/"x": any combination, any order, e.g.
+// "examine bytes hex", "x100260 hex nochars", "x bytes".
+const uint32_t EXAMFLAG_BYTES    = 0x01;  // Byte granularity instead of word
+const uint32_t EXAMFLAG_HEX      = 0x02;  // Hexadecimal instead of octal
+const uint32_t EXAMFLAG_NOCHARS  = 0x04;  // Hide the trailing ASCII/character column
+
+//////////////////////////////////////////////////////////////////////
+// Continuation ("paging") for "examine"/"x" and "disasm"/"d"/"D".
+//
+// After printing a page, these commands can leave a "continuation" armed:
+// the next address to show plus the modifiers/format that produced the
+// current page. The main loop (bkbtldebug.cpp) checks for this before
+// showing the normal prompt; if armed, it shows "-- more --" instead and
+// reads a line. An empty line (just Enter) re-runs the same paging
+// command at the saved address. Any other input is just "stop paging" --
+// it answers the prompt, it is not a command line, so it's discarded and
+// control returns to the normal prompt.
+
+enum class ContinuationKind { None, Examine, Disasm };
+
+struct ContinuationState
+{
+    ContinuationKind kind = ContinuationKind::None;
+    uint16_t address = 0;
+    uint32_t examineFlags = 0;  // Used when kind == Examine
+    bool disasmShort = false;   // Used when kind == Disasm (D vs d)
+};
+
+ContinuationState g_continuation;
+
+// Print the "-- more --" prompt in the same color as the regular command
+// prompt, and arm the given continuation so the next blank Enter resumes.
+void ArmContinuation(const ContinuationState& state)
+{
+    g_continuation = state;
+    Console_ColorPrompt();
+    std::wcout << L"-- more (Enter to continue) --";
+    Console_ColorReset();
+}
 
 CProcessor* GetCurrentProcessor()
 {
@@ -73,7 +114,7 @@ void PrintDisassembleLine(uint16_t address, uint16_t value, LPCTSTR instr, LPCTS
 // Disassemble instructions starting at address.
 // okOneInstr: stop after the first instruction (used by Step Into).
 // Returns the number of words in the last instruction disassembled.
-int PrintDisassemble(CProcessor* pProc, uint16_t address, bool okOneInstr, bool okShort)
+int PrintDisassemble(CProcessor* pProc, uint16_t address, bool okOneInstr, bool okShort, uint16_t* pNextAddress = nullptr)
 {
     bool okHaltMode = pProc->IsHaltMode();
 
@@ -111,13 +152,24 @@ int PrintDisassemble(CProcessor* pProc, uint16_t address, bool okOneInstr, bool 
         length--;
         address += 2;
     }
+    if (pNextAddress != nullptr)
+        *pNextAddress = address;
     return lastLength;
 }
 
-// Print memory dump: address, 8 words in octal, then their ASCII representation
-void PrintMemoryDump(const CProcessor* pProc, uint16_t address, int lines = 8)
+// Print a memory dump: address, then either 8 words or 16 bytes (per
+// EXAMFLAG_BYTES), in octal or hex (per EXAMFLAG_HEX), then optionally
+// their ASCII/character representation (suppressed by EXAMFLAG_NOCHARS).
+// Always covers 16 bytes (one "line") per row regardless of granularity,
+// so word and byte dumps of the same region line up the same way.
+void PrintMemoryDumpGeneric(const CProcessor* pProc, uint16_t address, uint32_t flags, int lines = 8, uint16_t* pNextAddress = nullptr)
 {
-    address &= ~1;  // Line up to even address
+    bool okBytes = (flags & EXAMFLAG_BYTES) != 0;
+    bool okHex = (flags & EXAMFLAG_HEX) != 0;
+    bool okChars = (flags & EXAMFLAG_NOCHARS) == 0;
+
+    if (!okBytes)
+        address &= ~1;  // Word dumps line up to an even address
     bool okHaltMode = pProc->IsHaltMode();
 
     for (int line = 0; line < lines; line++)
@@ -134,114 +186,99 @@ void PrintMemoryDump(const CProcessor* pProc, uint16_t address, int lines = 8)
         }
 
         TCHAR bufAddr[7];
-        PrintOctalValue(bufAddr, address);
+        if (okHex)
+            PrintHexValue(bufAddr, address);
+        else
+            PrintOctalValue(bufAddr, address);
         std::wcout << L"  " << bufAddr << L"  ";
-
-        for (int i = 0; i < 8; i++)
-        {
-            if (changed[i] != 0) Console_ColorModified();
-            TCHAR bufValue[7];
-            PrintOctalValue(bufValue, dump[i]);
-            std::wcout << bufValue << L" ";
-            Console_ColorReset();
-        }
-        std::wcout << L" ";
 
         for (int i = 0; i < 8; i++)
         {
             uint16_t word = dump[i];
-            uint8_t ch1 = (uint8_t)(word & 0xff);
-            wchar_t wch1 = (ch1 < 32) ? L'\xB7' : (wchar_t)Translate_BK_Unicode(ch1);
-            uint8_t ch2 = (uint8_t)(word >> 8);
-            wchar_t wch2 = (ch2 < 32) ? L'\xB7' : (wchar_t)Translate_BK_Unicode(ch2);
-            std::wcout << wch1 << wch2;
-        }
-        std::wcout << std::endl;
-
-        address += 16;
-    }
-}
-
-// Print memory dump: address, 16 bytes in octal (3 digits each), then their
-// ASCII representation. Same layout as PrintMemoryDump but byte-granular --
-// uses the same PrintOctalValue helper, taking only its 3 lowest digits
-// (a byte never needs more than 3 octal digits: 000..377).
-void PrintMemoryDumpBytes(const CProcessor* pProc, uint16_t address, int lines = 8)
-{
-    bool okHaltMode = pProc->IsHaltMode();
-
-    for (int line = 0; line < lines; line++)
-    {
-        uint16_t dump[8];
-        uint16_t changed[8];
-        int addrtype;
-        for (int i = 0; i < 8; i++)
-        {
-            dump[i] = g_pBoard->GetWordView((uint16_t)(address + i * 2), okHaltMode, false, &addrtype);
-            changed[i] = addrtype == ADDRTYPE_ROM
-                ? 0
-                : Emulator_GetChangeRamStatus(address + i * 2);
-        }
-
-        TCHAR bufAddr[7];
-        PrintOctalValue(bufAddr, address);
-        std::wcout << L"  " << bufAddr << L"  ";
-
-        for (int i = 0; i < 8; i++)
-        {
-            uint16_t value = dump[i];
             if (changed[i] != 0) Console_ColorModified();
-            TCHAR bufValue[7];
-            PrintOctalValue(bufValue, value & 0xFF);
-            std::wcout << (bufValue + 3) << L" ";
-            PrintOctalValue(bufValue, value >> 8);
-            std::wcout << (bufValue + 3) << L" ";
+            if (okBytes)
+            {
+                TCHAR bufValue[7];
+                if (okHex)
+                {
+                    PrintHexValue(bufValue, word & 0xFF);
+                    std::wcout << (bufValue + 2) << L" ";
+                    PrintHexValue(bufValue, word >> 8);
+                    std::wcout << (bufValue + 2) << L" ";
+                }
+                else
+                {
+                    PrintOctalValue(bufValue, word & 0xFF);
+                    std::wcout << (bufValue + 3) << L" ";
+                    PrintOctalValue(bufValue, word >> 8);
+                    std::wcout << (bufValue + 3) << L" ";
+                }
+            }
+            else
+            {
+                TCHAR bufValue[7];
+                if (okHex)
+                    PrintHexValue(bufValue, word);
+                else
+                    PrintOctalValue(bufValue, word);
+                std::wcout << bufValue << L" ";
+            }
             Console_ColorReset();
         }
-        std::wcout << L" ";
 
-        for (int i = 0; i < 8; i++)
+        if (okChars)
         {
-            uint16_t value = dump[i];
-            uint8_t ch1 = (value >> 8);
-            wchar_t wch1 = (ch1 < 32) ? L'\xB7' : (wchar_t)Translate_BK_Unicode(ch1);
-            std::wcout << wch1;
-            uint8_t ch2 = (value >> 8);
-            wchar_t wch2 = (ch2 < 32) ? L'\xB7' : (wchar_t)Translate_BK_Unicode(ch2);
-            std::wcout << wch2;
+            std::wcout << L" ";
+            for (int i = 0; i < 8; i++)
+            {
+                uint16_t word = dump[i];
+                uint8_t ch1 = (uint8_t)(word & 0xff);
+                wchar_t wch1 = (ch1 < 32) ? L'\xB7' : (wchar_t)Translate_BK_Unicode(ch1);
+                uint8_t ch2 = (uint8_t)(word >> 8);
+                wchar_t wch2 = (ch2 < 32) ? L'\xB7' : (wchar_t)Translate_BK_Unicode(ch2);
+                std::wcout << wch1 << wch2;
+            }
         }
         std::wcout << std::endl;
 
         address += 16;
     }
+    if (pNextAddress != nullptr)
+        *pNextAddress = address;
 }
 
 // Convert a wstring command-line argument (e.g. a filename) to a TCHAR
-// string. Under GCC, TCHAR is plain char, so this is a narrowing
-// conversion using the current C locale; under real MSVC, TCHAR is
-// typically wchar_t already, so it's a no-op copy. Filenames here are
-// expected to be plain ASCII, so the locale-dependent narrowing is not a
-// practical concern.
-std::basic_string<TCHAR> WStringToTString(const std::wstring& ws)
+// string. Under GCC, TCHAR is plain char, so this narrows via the current
+// C locale; under real MSVC, TCHAR is wchar_t, so it's effectively a copy.
+//
+// Templated on a dummy parameter so only the branch matching TCHAR's
+// actual type needs to type-check: plain "if constexpr" inside a
+// non-template function still requires both branches to be well-formed
+// even though only one runs, and basic_string<char> cannot convert to
+// basic_string<wchar_t> (or vice versa) as a return statement regardless
+// of which branch executes. (Checking #ifdef _UNICODE here, as an earlier
+// version of this function did, is wrong: this project never defines
+// _UNICODE anywhere, on any platform, so that branch was always dead and
+// the function always silently took the narrow path -- harmless under
+// GCC where TCHAR is already char, but it meant this function has never
+// actually been exercised, or correct, under a genuine TCHAR=wchar_t
+// build until this fix.)
+template <typename T>
+std::basic_string<T> WStringToTStringImpl(const std::wstring& ws)
 {
-#ifdef _UNICODE
-    return ws;
-#else
-    std::vector<char> buf(ws.size() * MB_CUR_MAX + 1);
-    std::wcstombs(buf.data(), ws.c_str(), buf.size());
-    return std::string(buf.data());
-#endif
+    if constexpr (std::is_same_v<T, wchar_t>)
+    {
+        return ws;
+    }
+    else
+    {
+        return WStringToNarrowString(ws);
+    }
 }
 
-// Convert a wstring command-line argument to a plain std::string, always
-// narrow regardless of TCHAR's width. Needed for APIs that hardcode
-// std::string in their signature (e.g. Emulator_SaveImage/LoadImage)
-// rather than using TCHAR/LPCTSTR.
-std::string WStringToNarrowString(const std::wstring& ws)
+std::basic_string<TCHAR> WStringToTString(const std::wstring& ws)
 {
-    std::vector<char> buf(ws.size() * MB_CUR_MAX + 1);
-    std::wcstombs(buf.data(), ws.c_str(), buf.size());
-    return std::string(buf.data());
+    return WStringToTStringImpl<TCHAR>(ws);
 }
 
 // Save full 64K memory dump to a file ("memdump.bin" by default).
@@ -250,13 +287,13 @@ std::string WStringToNarrowString(const std::wstring& ws)
 bool SaveMemoryDump(const std::wstring& wfilename)
 {
     std::wstring filename = wfilename.empty() ? L"memdump.bin" : wfilename;
-    std::basic_string<TCHAR> tfilename = WStringToTString(filename);
+    std::string narrowFilename = WStringToNarrowString(filename);
 
     std::vector<uint8_t> buf(65536);
     for (int i = 0; i < 65536; i++)
         buf[i] = g_pBoard->GetByte((uint16_t)i, true);
 
-    std::ofstream file(tfilename.c_str(), std::ios::binary | std::ios::trunc);
+    std::ofstream file(narrowFilename.c_str(), std::ios::binary | std::ios::trunc);
     if (!file.is_open())
         return false;
 
@@ -273,9 +310,9 @@ bool SaveMemoryDump(const std::wstring& wfilename)
 // failure (file not found / unreadable, oversized, or header size mismatch).
 std::wstring LoadBin(const std::wstring& wfilename)
 {
-    std::basic_string<TCHAR> tfilename = WStringToTString(wfilename);
+    std::string narrowFilename = WStringToNarrowString(wfilename);
 
-    std::ifstream file(tfilename.c_str(), std::ios::binary);
+    std::ifstream file(narrowFilename.c_str(), std::ios::binary);
     if (!file.is_open())
         return L"could not open file";
 
@@ -341,12 +378,6 @@ struct ConsoleCommandParams
     bool paramHasAddress = false; // Whether an explicit address was given (vs PC default)
 };
 
-// Modifier postfixes for "examine"/"x": any combination, any order, e.g.
-// "examine bytes hex", "x100260 hex nochars", "x bytes".
-const uint32_t EXAMFLAG_BYTES    = 0x01;  // Byte granularity instead of word
-const uint32_t EXAMFLAG_HEX      = 0x02;  // Hexadecimal instead of octal
-const uint32_t EXAMFLAG_NOCHARS  = 0x04;  // Hide the trailing ASCII/character column
-
 //////////////////////////////////////////////////////////////////////
 // Console command handlers
 // Mirrors the ConsoleView_Cmd* functions.
@@ -363,9 +394,9 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  s, step        Step Into; executes one instruction\n"
         L"  n, next        Step Over (Next); executes and stops after the current instruction\n"
         L"  r, regs        Show register values\n"
-        L"  regs ext       Show extended (I/O port) registers\n"
-        L"  regs floppy    Show floppy controller registers and state\n"
-        L"  status         Show machine status: uptime, floppy drives\n"
+        L"  r ext, regs ext  Show extended (I/O port) registers\n"
+        L"  i, info        Show machine status: uptime, floppy drives\n"
+        L"  i floppy, info floppy  Show floppy controller registers and state\n"
         L"  rN             Show value of register N; N=0..7\n"
         L"  rN=XXXXXX      Set register N to value XXXXXX; N=0..7\n"
         L"  rps            Show PS (processor status word)\n"
@@ -374,27 +405,30 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  rpc=XXXXXX     Set PC to value XXXXXX\n"
         L"  rsp            Show SP (same as the SP shown by r/regs)\n"
         L"  rsp=XXXXXX     Set SP to value XXXXXX\n"
-        L"  d, disasm      Disassemble from PC; use D for short format\n"
+        L"  d, disasm      Disassemble from PC; use D for short format; paged output\n"
         L"  dXXXXXX, disasm XXXXXX  Disassemble from address XXXXXX\n"
-        L"  x, examine     Examine memory at current address\n"
+        L"  x, examine     Examine memory at current address; paged output\n"
         L"  xXXXXX, examine XXXXXX  Examine memory at address XXXXXX\n"
-        L"  examine bytes XXXXXX  Examine memory at address XXXXXX, byte granularity\n"
+        L"  ... bytes      Modifier: byte granularity instead of words\n"
+        L"  ... hex        Modifier: hexadecimal instead of octal\n"
+        L"  ... nochars    Modifier: hide the ASCII/character column\n"
+        L"                 Modifiers combine in any order, e.g. \"x100260 bytes hex\"\n"
         L"  b              List all breakpoints\n"
         L"  bXXXXXX        Set breakpoint at address XXXXXX\n"
         L"  bc             Remove all breakpoints\n"
         L"  bcXXXXXX       Remove breakpoint at address XXXXXX\n"
-        L"  mo, monitor    Type M O / Enter (BASIC) or P SPACE M / Enter (FOCAL) to exit to Monitor\n"
         L"  t, trace       Toggle instruction tracing to trace.log on/off\n"
         L"  tXXXXXX, trace XXXXXX  Set trace flags XXXXXX (see TRACE_xxx constants)\n"
-        L"  tc             Clear trace.log\n"
+        L"  tc, t clear, trace clear  Clear trace.log\n"
         L"  memsave [FILE] Save memory dump as FILE; default memdump.bin\n"
         L"  loadbin FILE   Load a .bin file (tape image: start addr + size + data) into RAM\n"
         L"  statesave FILE Save full emulator state (memory, registers, ports) to FILE\n"
         L"  stateload FILE Load full emulator state from FILE\n"
-        L"  diskN attach FILE  Attach floppy image FILE to drive N; N=A..D\n"
-        L"  diskN detach   Detach floppy image from drive N; N=A..D\n"
+        L"  diskN attach FILE, diskN a FILE  Attach floppy image FILE to drive N; N=A..D\n"
+        L"  diskN detach, diskN d  Detach floppy image from drive N; N=A..D\n"
         L"  screen [FILE]  Save black/white screenshot as FILE (PNG); default filename from timestamp\n"
         L"  screenc [FILE] Save color screenshot as FILE (PNG); default filename from timestamp\n"
+        L"  mo, monitor    Type M O / Enter (BASIC) or P SPACE M / Enter (FOCAL) to exit to Monitor\n"
         L"  q, quit, exit  Quit the debugger\n";
 }
 
@@ -480,7 +514,7 @@ void CmdPrintExtendedRegisters(const ConsoleCommandParams& /*params*/)
 // Print "Floppy engine: ON/off" and the per-drive attach/read-only list.
 // Caller must have already checked BK_COPT_FDD.
 // okMarkSelected: append "(selected)" to the currently selected drive's
-// line (used by "regs floppy"; "status" doesn't show this).
+// line (used by "info floppy"; "i"/"info" doesn't show this).
 void PrintFloppyEngineAndDrives(bool okMarkSelected)
 {
     std::wcout << L"Floppy engine: " << (Emulator_IsFloppyEngineOn() ? L"ON" : L"off") << std::endl;
@@ -566,6 +600,10 @@ void CmdSetRegisterValue(const ConsoleCommandParams& params)
     uint16_t value = params.paramOct1;
     CProcessor* pProc = GetCurrentProcessor();
     pProc->SetReg(r, value);
+
+    TCHAR bufValue[7];
+    PrintOctalValue(bufValue, value);
+    std::wcout << REGISTER_NAME[r] << L" set to " << bufValue << std::endl;
 }
 
 void CmdPrintRegisterPSW(const ConsoleCommandParams& /*params*/)
@@ -580,6 +618,10 @@ void CmdSetRegisterPSW(const ConsoleCommandParams& params)
     uint16_t value = params.paramOct1;
     CProcessor* pProc = GetCurrentProcessor();
     pProc->SetPSW(value);
+
+    TCHAR bufValue[7];
+    PrintOctalValue(bufValue, value);
+    std::wcout << L"PS set to " << bufValue << std::endl;
 }
 
 void CmdPrintRegisterSP(const ConsoleCommandParams& /*params*/)
@@ -594,6 +636,10 @@ void CmdSetRegisterSP(const ConsoleCommandParams& params)
     uint16_t value = params.paramOct1;
     CProcessor* pProc = GetCurrentProcessor();
     pProc->SetReg(6, value);
+
+    TCHAR bufValue[7];
+    PrintOctalValue(bufValue, value);
+    std::wcout << L"SP set to " << bufValue << std::endl;
 }
 
 void CmdPrintRegisterPC(const ConsoleCommandParams& /*params*/)
@@ -608,11 +654,16 @@ void CmdSetRegisterPC(const ConsoleCommandParams& params)
     uint16_t value = params.paramOct1;
     CProcessor* pProc = GetCurrentProcessor();
     pProc->SetReg(7, value);
+
+    TCHAR bufValue[7];
+    PrintOctalValue(bufValue, value);
+    std::wcout << L"PC set to " << bufValue << std::endl;
 }
 
 void CmdReset(const ConsoleCommandParams& /*params*/)
 {
     Emulator_Reset();
+    std::wcout << L"Reset." << std::endl;
 }
 
 void CmdStepInto(const ConsoleCommandParams& /*params*/)
@@ -650,7 +701,14 @@ void CmdPrintDisassembleAtPC(const ConsoleCommandParams& params)
     bool okShort = (params.commandText[0] == L'D');
     CProcessor* pProc = GetCurrentProcessor();
     uint16_t address = pProc->GetPC();
-    PrintDisassemble(pProc, address, false, okShort);
+    uint16_t nextAddress;
+    PrintDisassemble(pProc, address, false, okShort, &nextAddress);
+
+    ContinuationState state;
+    state.kind = ContinuationKind::Disasm;
+    state.address = nextAddress;
+    state.disasmShort = okShort;
+    ArmContinuation(state);
 }
 
 void CmdPrintDisassembleAtAddress(const ConsoleCommandParams& params)
@@ -658,7 +716,14 @@ void CmdPrintDisassembleAtAddress(const ConsoleCommandParams& params)
     uint16_t address = params.paramOct1;
     bool okShort = (params.commandText[0] == L'D');
     CProcessor* pProc = GetCurrentProcessor();
-    PrintDisassemble(pProc, address, false, okShort);
+    uint16_t nextAddress;
+    PrintDisassemble(pProc, address, false, okShort, &nextAddress);
+
+    ContinuationState state;
+    state.kind = ContinuationKind::Disasm;
+    state.address = nextAddress;
+    state.disasmShort = okShort;
+    ArmContinuation(state);
 }
 
 void CmdSaveMemoryDump(const ConsoleCommandParams& params)
@@ -754,25 +819,21 @@ void CmdScreenshot(const ConsoleCommandParams& params)
         std::wcout << L"FAILED to save screenshot " << filename << std::endl;
 }
 
-void CmdPrintMemoryDumpAtPC(const ConsoleCommandParams& /*params*/)
+// "examine"/"x": optional address (default PC), then any combination of
+// postfix modifiers ("bytes", "hex", "nochars") in any order, e.g.
+// "x", "x100260", "examine 100260 bytes hex", "x hex nochars".
+void CmdExamineMemory(const ConsoleCommandParams& params)
 {
     CProcessor* pProc = GetCurrentProcessor();
-    uint16_t address = pProc->GetPC();
-    PrintMemoryDump(pProc, address);
-}
+    uint16_t address = params.paramHasAddress ? params.paramOct1 : pProc->GetPC();
+    uint16_t nextAddress;
+    PrintMemoryDumpGeneric(pProc, address, params.paramFlags, 8, &nextAddress);
 
-void CmdPrintMemoryDumpAtAddress(const ConsoleCommandParams& params)
-{
-    uint16_t address = params.paramOct1;
-    CProcessor* pProc = GetCurrentProcessor();
-    PrintMemoryDump(pProc, address);
-}
-
-void CmdPrintMemoryDumpBytesAtAddress(const ConsoleCommandParams& params)
-{
-    uint16_t address = params.paramOct1;
-    CProcessor* pProc = GetCurrentProcessor();
-    PrintMemoryDumpBytes(pProc, address);
+    ContinuationState state;
+    state.kind = ContinuationKind::Examine;
+    state.address = nextAddress;
+    state.examineFlags = params.paramFlags;
+    ArmContinuation(state);
 }
 
 // Run until a breakpoint is hit, or until maxFrames frames have been run.
@@ -952,7 +1013,13 @@ void CmdSetBreakpointAtAddress(const ConsoleCommandParams& params)
     uint16_t address = params.paramOct1;
     bool result = Emulator_AddCPUBreakpoint(address);
     if (!result)
+    {
         std::wcout << L" Failed to add breakpoint." << std::endl;
+        return;
+    }
+    TCHAR bufAddr[7];
+    PrintOctalValue(bufAddr, address);
+    std::wcout << L"Breakpoint set at " << bufAddr << std::endl;
 }
 
 void CmdRemoveBreakpointAtAddress(const ConsoleCommandParams& params)
@@ -960,12 +1027,19 @@ void CmdRemoveBreakpointAtAddress(const ConsoleCommandParams& params)
     uint16_t address = params.paramOct1;
     bool result = Emulator_RemoveCPUBreakpoint(address);
     if (!result)
+    {
         std::wcout << L" Failed to remove breakpoint." << std::endl;
+        return;
+    }
+    TCHAR bufAddr[7];
+    PrintOctalValue(bufAddr, address);
+    std::wcout << L"Breakpoint removed at " << bufAddr << std::endl;
 }
 
 void CmdRemoveAllBreakpoints(const ConsoleCommandParams& /*params*/)
 {
     Emulator_RemoveAllBreakpoints();
+    std::wcout << L"All breakpoints removed." << std::endl;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -1015,8 +1089,11 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"rsp ",  ARGINFO_OCT,     CmdSetRegisterSP },              // rsp XXXXXX
     { L"rsp",   ARGINFO_NONE,    CmdPrintRegisterSP },            // rsp
     { L"regs ext", ARGINFO_NONE,  CmdPrintExtendedRegisters },     // regs ext
-    { L"regs floppy", ARGINFO_NONE, CmdPrintFloppyRegisters },     // regs floppy
-    { L"status",   ARGINFO_NONE,  CmdShowStatus },                 // status
+    { L"r ext", ARGINFO_NONE,     CmdPrintExtendedRegisters },     // r ext
+    { L"info floppy", ARGINFO_NONE, CmdPrintFloppyRegisters },     // info floppy
+    { L"i floppy", ARGINFO_NONE,  CmdPrintFloppyRegisters },       // i floppy
+    { L"info",     ARGINFO_NONE,  CmdShowStatus },                 // info
+    { L"i",        ARGINFO_NONE,  CmdShowStatus },                 // i
     { L"regs",  ARGINFO_NONE,    CmdPrintAllRegisters },          // regs
     { L"r",     ARGINFO_NONE,    CmdPrintAllRegisters },          // r
 
@@ -1043,10 +1120,18 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"diskB attach", ARGINFO_FILENAME, CmdAttachFloppyImage },     // diskB attach FILENAME
     { L"diskC attach", ARGINFO_FILENAME, CmdAttachFloppyImage },     // diskC attach FILENAME
     { L"diskD attach", ARGINFO_FILENAME, CmdAttachFloppyImage },     // diskD attach FILENAME
+    { L"diskA a", ARGINFO_FILENAME,      CmdAttachFloppyImage },     // diskA a FILENAME
+    { L"diskB a", ARGINFO_FILENAME,      CmdAttachFloppyImage },     // diskB a FILENAME
+    { L"diskC a", ARGINFO_FILENAME,      CmdAttachFloppyImage },     // diskC a FILENAME
+    { L"diskD a", ARGINFO_FILENAME,      CmdAttachFloppyImage },     // diskD a FILENAME
     { L"diskA detach", ARGINFO_NONE,     CmdDetachFloppyImage },     // diskA detach
     { L"diskB detach", ARGINFO_NONE,     CmdDetachFloppyImage },     // diskB detach
     { L"diskC detach", ARGINFO_NONE,     CmdDetachFloppyImage },     // diskC detach
     { L"diskD detach", ARGINFO_NONE,     CmdDetachFloppyImage },     // diskD detach
+    { L"diskA d", ARGINFO_NONE,          CmdDetachFloppyImage },     // diskA d
+    { L"diskB d", ARGINFO_NONE,          CmdDetachFloppyImage },     // diskB d
+    { L"diskC d", ARGINFO_NONE,          CmdDetachFloppyImage },     // diskC d
+    { L"diskD d", ARGINFO_NONE,          CmdDetachFloppyImage },     // diskD d
 
     { L"screenc", ARGINFO_OPT_FILENAME, CmdScreenshot },
     { L"screen",  ARGINFO_OPT_FILENAME, CmdScreenshot },
@@ -1055,15 +1140,14 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"mo",      ARGINFO_NONE,   CmdGotoMonitor },
 
     { L"tc",    ARGINFO_NONE,    CmdClearTraceLog },              // tc
+    { L"trace clear", ARGINFO_NONE, CmdClearTraceLog },           // trace clear
+    { L"t clear", ARGINFO_NONE,  CmdClearTraceLog },               // t clear
     { L"trace ", ARGINFO_OCT,    CmdTraceLogWithMask },           // trace XXXXXX
     { L"t",     ARGINFO_OCT,     CmdTraceLogWithMask },           // tXXXXXX
     { L"trace", ARGINFO_NONE,    CmdTraceLogOnOff },              // trace
     { L"t",     ARGINFO_NONE,    CmdTraceLogOnOff },              // t
-    { L"examine bytes ", ARGINFO_OCT, CmdPrintMemoryDumpBytesAtAddress }, // examine bytes XXXXXX
-    { L"examine ", ARGINFO_OCT,  CmdPrintMemoryDumpAtAddress },  // examine XXXXXX
-    { L"examine",  ARGINFO_NONE, CmdPrintMemoryDumpAtPC },       // examine
-    { L"x",       ARGINFO_OCT,    CmdPrintMemoryDumpAtAddress },  // xXXXXX
-    { L"x",       ARGINFO_NONE,   CmdPrintMemoryDumpAtPC },       // x
+    { L"examine", ARGINFO_OCT_MODIFIERS, CmdExamineMemory },      // examine [XXXXXX] [bytes] [hex] [nochars]
+    { L"x",       ARGINFO_OCT_MODIFIERS, CmdExamineMemory },      // x[XXXXXX] [bytes] [hex] [nochars]
 
     { L"continue frames ", ARGINFO_DEC, CmdRunFrames },             // continue frames N (decimal)
     { L"continue ", ARGINFO_OCT, CmdRunToAddress },                 // continue XXXXXX
@@ -1247,6 +1331,43 @@ void PrintConsolePrompt()
     PrintOctalValue(bufAddr, pProc->GetPC());
     std::wcout << bufAddr << L"> ";
     Console_ColorReset();
+}
+
+bool HasPendingContinuation()
+{
+    return g_continuation.kind != ContinuationKind::None;
+}
+
+void ClearPendingContinuation()
+{
+    g_continuation.kind = ContinuationKind::None;
+}
+
+// Print the next page for the armed continuation (examine or disasm),
+// picking up exactly where the previous page left off, and re-arm for
+// the page after that. Does nothing if no continuation is armed.
+void RunPendingContinuation()
+{
+    if (g_continuation.kind == ContinuationKind::None)
+        return;
+
+    ContinuationState state = g_continuation;  // Local copy: handlers below overwrite g_continuation
+    CProcessor* pProc = GetCurrentProcessor();
+
+    if (state.kind == ContinuationKind::Examine)
+    {
+        uint16_t nextAddress;
+        PrintMemoryDumpGeneric(pProc, state.address, state.examineFlags, 8, &nextAddress);
+        state.address = nextAddress;
+        ArmContinuation(state);
+    }
+    else if (state.kind == ContinuationKind::Disasm)
+    {
+        uint16_t nextAddress;
+        PrintDisassemble(pProc, state.address, false, state.disasmShort, &nextAddress);
+        state.address = nextAddress;
+        ArmContinuation(state);
+    }
 }
 
 bool DoConsoleCommand(const std::wstring& command)

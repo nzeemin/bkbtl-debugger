@@ -104,6 +104,21 @@ bool ParseHexValue(const char* text, uint16_t* pValue);
 
 uint16_t Translate_BK_Unicode(uint8_t ch);
 
+// Convert a wide string to a plain narrow std::string (always narrow,
+// regardless of TCHAR's width -- e.g. for std::string-based APIs and
+// command-line argument handling). Uses the current C locale.
+std::string WStringToNarrowString(const std::wstring& ws);
+
+// Convert a plain narrow std::string to a TCHAR string. Under GCC/Clang,
+// TCHAR is char, so this is a no-op copy; under real MSVC, TCHAR is
+// wchar_t, so this widens via the current C locale. Use this (rather than
+// embedding a narrow string into a TCHAR-typed printf-style format string)
+// whenever a runtime-built narrow string -- e.g. a file path -- needs to
+// be passed to a TCHAR/LPCTSTR API like AlertWarning, since the correct
+// "embed a narrow string into a wide format" specifier is MSVC-specific
+// (%hs) and not portable to GCC's plain vsnprintf.
+std::basic_string<TCHAR> NarrowStringToTString(const std::string& s);
+
 
 //////////////////////////////////////////////////////////////////////
 #endif // COMMON_H

@@ -101,6 +101,7 @@ void PrintWelcome()
 void PrintUsage()
 {
     std::wcout << std::endl << L"Usage:" << std::endl
+            << L"  --romdir DIR   Directory to look for .rom files in; default is the current directory" << std::endl
             << L"  conf:NAME      Select machine configuration; default is BK-0010-BASIC" << std::endl
             << L"                 Available: ";
     for (size_t i = 0; i < ConfigurationNamesCount; i++)
@@ -115,10 +116,21 @@ void PrintUsage()
 
 bool ParseCommandLine(std::vector<std::wstring>& wargs)
 {
-    for (auto warg : wargs)
+    for (size_t argi = 0; argi < wargs.size(); argi++)
     {
+        const std::wstring& warg = wargs[argi];
         const wchar_t* arg = warg.c_str();
-        if (arg[0] == OPTIONCHAR)
+        if (warg == L"--romdir")
+        {
+            if (argi + 1 >= wargs.size())
+            {
+                std::wcout << L"--romdir requires a directory argument" << std::endl;
+                return false;
+            }
+            argi++;
+            g_strRomDirectory = WStringToNarrowString(wargs[argi]);
+        }
+        else if (arg[0] == OPTIONCHAR)
         {
             if (wcscmp(arg + 1, L"sha1") == 0)
             {
@@ -253,6 +265,28 @@ int wmain_impl(std::vector<std::wstring>& wargs)
     std::wstring line;
     for (;;)
     {
+        if (HasPendingContinuation())
+        {
+            // The "-- more --" prompt was already printed by the command
+            // that armed the continuation (or by the previous iteration of
+            // this branch); just read the response here.
+            if (!std::getline(std::wcin, line))
+                break;  // EOF (Ctrl+D / Ctrl+Z)
+
+            if (line.empty())
+            {
+                RunPendingContinuation();  // Re-arms for the next page
+                continue;
+            }
+
+            // Any other input is just "stop paging" -- it answers the
+            // prompt, it is not a command line. Discard it and go back to
+            // the normal prompt, so typing anything other than Enter to
+            // get out of the pager can never accidentally run a command.
+            ClearPendingContinuation();
+            continue;
+        }
+
         PrintConsolePrompt();
         if (!std::getline(std::wcin, line))
             break;  // EOF (Ctrl+D / Ctrl+Z)

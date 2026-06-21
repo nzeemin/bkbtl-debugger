@@ -21,6 +21,7 @@ BKBTL. If not, see <http://www.gnu.org/licenses/>. */
 
 CMotherboard* g_pBoard = nullptr;
 BKConfiguration g_nEmulatorConfiguration;  // Current configuration
+std::string g_strRomDirectory;  // Directory to look for .rom files in; empty = current directory
 
 static bool g_okEmulatorInitialized = false;
 bool g_okEmulatorRunning = false;
@@ -131,9 +132,27 @@ const uint32_t ScreenView_ColorPalettes[16][4] =
 
 bool Emulator_LoadRomFile(const char * strFileName, uint8_t* buffer, uint32_t fileOffset, uint32_t bytesToRead)
 {
-    FILE* fpRomFile = ::fopen(strFileName, "rb");
+    std::string strPath = strFileName;
+    if (!g_strRomDirectory.empty())
+    {
+        char lastChar = g_strRomDirectory.back();
+#ifdef _MSC_VER
+        bool okHasSeparator = (lastChar == '\\' || lastChar == '/');
+        const char* separator = "\\";
+#else
+        bool okHasSeparator = (lastChar == '/');
+        const char* separator = "/";
+#endif
+        strPath = g_strRomDirectory + (okHasSeparator ? "" : separator) + strFileName;
+    }
+
+    FILE* fpRomFile = ::fopen(strPath.c_str(), "rb");
     if (fpRomFile == nullptr)
+    {
+        std::string strMessage = "Could not open ROM file: " + strPath;
+        AlertWarning(NarrowStringToTString(strMessage).c_str());
         return false;
+    }
 
     ASSERT(bytesToRead <= 8192);
     ::memset(buffer, 0, 8192);
@@ -147,6 +166,8 @@ bool Emulator_LoadRomFile(const char * strFileName, uint8_t* buffer, uint32_t fi
     if (dwBytesRead != bytesToRead)
     {
         ::fclose(fpRomFile);
+        std::string strMessage = "Could not read ROM file data: " + strPath;
+        AlertWarning(NarrowStringToTString(strMessage).c_str());
         return false;
     }
 

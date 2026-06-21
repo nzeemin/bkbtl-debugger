@@ -2,6 +2,8 @@
 
 #include "stdafx.h"
 #include <cstdarg>
+#include <cstdlib>
+#include <type_traits>
 #include "bkbtldebug.h"
 
 
@@ -136,7 +138,7 @@ void PrintHexValue(TCHAR* buffer, uint16_t value)
     for (int p = 0; p < 4; p++)
     {
         int digit = value & 15;
-        buffer[3 - p] = (digit < 10) ? _T('0') + (TCHAR)digit : _T('a') + (TCHAR)(digit - 10);
+        buffer[3 - p] = (digit < 10) ? _T('0') + (TCHAR)digit : _T('A') + (TCHAR)(digit - 10);
         value = (value >> 4);
     }
     buffer[4] = 0;
@@ -226,6 +228,38 @@ uint16_t Translate_BK_Unicode(uint8_t ch)
     if (ch == 127) return (uint16_t) 0x25A0;
     if (ch >= 128 && ch < 160) return 0x00b7;
     return BK_CHAR_CODES[ch - 160];
+}
+
+std::string WStringToNarrowString(const std::wstring& ws)
+{
+    std::vector<char> buf(ws.size() * MB_CUR_MAX + 1);
+    std::wcstombs(buf.data(), ws.c_str(), buf.size());
+    return std::string(buf.data());
+}
+
+// Template helper so only the branch matching TCHAR's actual type needs to
+// type-check: plain "if constexpr" inside a non-template function still
+// requires both branches to be well-formed even though only one runs, which
+// breaks here since basic_string<char> cannot convert to basic_string<wchar_t>
+// (or vice versa) as a return statement regardless of which branch executes.
+template <typename T>
+std::basic_string<T> NarrowStringToTStringImpl(const std::string& s)
+{
+    if constexpr (std::is_same_v<T, char>)
+    {
+        return s;
+    }
+    else
+    {
+        std::vector<T> buf(s.size() + 1);
+        std::mbstowcs(reinterpret_cast<wchar_t*>(buf.data()), s.c_str(), buf.size());
+        return std::basic_string<T>(buf.data());
+    }
+}
+
+std::basic_string<TCHAR> NarrowStringToTString(const std::string& s)
+{
+    return NarrowStringToTStringImpl<TCHAR>(s);
 }
 
 
