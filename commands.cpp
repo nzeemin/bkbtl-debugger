@@ -32,14 +32,14 @@ const wchar_t* const MESSAGE_UNKNOWN_COMMAND  = L" Unknown command.";
 const wchar_t* const MESSAGE_INVALID_REGNUM   = L" Invalid register number, 0..7 expected.";
 const wchar_t* const MESSAGE_WRONG_VALUE      = L" Wrong value.";
 
-// Modifier postfixes for "examine"/"x": any combination, any order, e.g.
-// "examine bytes hex", "x100260 hex nochars", "x bytes".
-const uint32_t EXAMFLAG_BYTES    = 0x01;  // Byte granularity instead of word
-const uint32_t EXAMFLAG_HEX      = 0x02;  // Hexadecimal instead of octal
-const uint32_t EXAMFLAG_NOCHARS  = 0x04;  // Hide the trailing ASCII/character column
+// Modifier postfixes for "memory"/"m": any combination, any order, e.g.
+// "memory bytes hex", "m100260 hex nochars", "m bytes".
+const uint32_t MEMFLAG_BYTES    = 0x01;  // Byte granularity instead of word
+const uint32_t MEMFLAG_HEX      = 0x02;  // Hexadecimal instead of octal
+const uint32_t MEMFLAG_NOCHARS  = 0x04;  // Hide the trailing ASCII/character column
 
 //////////////////////////////////////////////////////////////////////
-// Continuation ("paging") for "examine"/"x" and "disasm"/"d"/"D".
+// Continuation ("paging") for "memory"/"m" and "disasm"/"d"/"D".
 //
 // After printing a page, these commands can leave a "continuation" armed:
 // the next address to show plus the modifiers/format that produced the
@@ -50,13 +50,13 @@ const uint32_t EXAMFLAG_NOCHARS  = 0x04;  // Hide the trailing ASCII/character c
 // it answers the prompt, it is not a command line, so it's discarded and
 // control returns to the normal prompt.
 
-enum class ContinuationKind { None, Examine, Disasm };
+enum class ContinuationKind { None, Memory, Disasm };
 
 struct ContinuationState
 {
     ContinuationKind kind = ContinuationKind::None;
     uint16_t address = 0;
-    uint32_t examineFlags = 0;  // Used when kind == Examine
+    uint32_t memoryFlags = 0;  // Used when kind == Memory
     bool disasmShort = false;   // Used when kind == Disasm (D vs d)
 };
 
@@ -158,15 +158,15 @@ int PrintDisassemble(CProcessor* pProc, uint16_t address, bool okOneInstr, bool 
 }
 
 // Print a memory dump: address, then either 8 words or 16 bytes (per
-// EXAMFLAG_BYTES), in octal or hex (per EXAMFLAG_HEX), then optionally
-// their ASCII/character representation (suppressed by EXAMFLAG_NOCHARS).
+// MEMFLAG_BYTES), in octal or hex (per MEMFLAG_HEX), then optionally
+// their ASCII/character representation (suppressed by MEMFLAG_NOCHARS).
 // Always covers 16 bytes (one "line") per row regardless of granularity,
 // so word and byte dumps of the same region line up the same way.
 void PrintMemoryDumpGeneric(const CProcessor* pProc, uint16_t address, uint32_t flags, int lines = 8, uint16_t* pNextAddress = nullptr)
 {
-    bool okBytes = (flags & EXAMFLAG_BYTES) != 0;
-    bool okHex = (flags & EXAMFLAG_HEX) != 0;
-    bool okChars = (flags & EXAMFLAG_NOCHARS) == 0;
+    bool okBytes = (flags & MEMFLAG_BYTES) != 0;
+    bool okHex = (flags & MEMFLAG_HEX) != 0;
+    bool okChars = (flags & MEMFLAG_NOCHARS) == 0;
 
     if (!okBytes)
         address &= ~1;  // Word dumps line up to an even address
@@ -374,7 +374,7 @@ struct ConsoleCommandParams
     uint16_t paramOct1 = 0;
     uint16_t paramOct2 = 0;
     std::wstring paramFilename;
-    uint32_t paramFlags = 0;     // Modifier postfix flags, see EXAMFLAG_xxx
+    uint32_t paramFlags = 0;     // Modifier postfix flags, see MEMFLAG_xxx
     bool paramHasAddress = false; // Whether an explicit address was given (vs PC default)
     size_t paramPrefixLength = 0; // Length of the table prefix that matched commandText
 };
@@ -391,7 +391,7 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  reset          Reset the machine\n"
         L"  c, continue    Continue; free run\n"
         L"  cXXXXXX, continue XXXXXX  Continue; run and stop at address XXXXXX\n"
-        L"  continue frames N  Continue; run for N frames, decimal (1 sec = 25 frames)\n"
+        L"  cfN, continue frames N  Continue; run for N frames, decimal (1 sec = 25 frames)\n"
         L"  s, step        Step Into; executes one instruction\n"
         L"  n, next        Step Over (Next); executes and stops after the current instruction\n"
         L"  r, regs        Show register values\n"
@@ -408,12 +408,14 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  rsp=XXXXXX     Set SP to value XXXXXX\n"
         L"  d, disasm      Disassemble from PC; use D for short format; paged output\n"
         L"  dXXXXXX, disasm XXXXXX  Disassemble from address XXXXXX\n"
-        L"  x, examine     Examine memory at current address; paged output\n"
-        L"  xXXXXX, examine XXXXXX  Examine memory at address XXXXXX\n"
+        L"  m, memory      Examine memory at current address; paged output\n"
+        L"  mXXXXXX, memory XXXXXX  Examine memory at address XXXXXX\n"
+        L"  ms ADDR=VALUE, memset ADDR=VALUE  Set memory at ADDR to VALUE (word)\n"
+        L"  ms ADDR=VALUE bytes  Same, byte instead of word\n"
         L"  ... bytes      Modifier: byte granularity instead of words\n"
         L"  ... hex        Modifier: hexadecimal instead of octal\n"
         L"  ... nochars    Modifier: hide the ASCII/character column\n"
-        L"                 Modifiers combine in any order, e.g. \"x100260 bytes hex\"\n"
+        L"                 Modifiers combine in any order, e.g. \"m100260 bytes hex\"\n"
         L"  b              List all breakpoints\n"
         L"  bXXXXXX        Set breakpoint at address XXXXXX\n"
         L"  bc             Remove all breakpoints\n"
@@ -827,10 +829,10 @@ void CmdScreenshot(const ConsoleCommandParams& params)
         std::wcout << L"FAILED to save screenshot " << filename << std::endl;
 }
 
-// "examine"/"x": optional address (default PC), then any combination of
+// "memory"/"m": optional address (default PC), then any combination of
 // postfix modifiers ("bytes", "hex", "nochars") in any order, e.g.
-// "x", "x100260", "examine 100260 bytes hex", "x hex nochars".
-void CmdExamineMemory(const ConsoleCommandParams& params)
+// "m", "m100260", "memory 100260 bytes hex", "m hex nochars".
+void CmdShowMemory(const ConsoleCommandParams& params)
 {
     CProcessor* pProc = GetCurrentProcessor();
     uint16_t address = params.paramHasAddress ? params.paramOct1 : pProc->GetPC();
@@ -838,10 +840,47 @@ void CmdExamineMemory(const ConsoleCommandParams& params)
     PrintMemoryDumpGeneric(pProc, address, params.paramFlags, 8, &nextAddress);
 
     ContinuationState state;
-    state.kind = ContinuationKind::Examine;
+    state.kind = ContinuationKind::Memory;
     state.address = nextAddress;
-    state.examineFlags = params.paramFlags;
+    state.memoryFlags = params.paramFlags;
     ArmContinuation(state);
+}
+
+// "memset"/"ms": "ADDR=VALUE" or "ADDR VALUE", optionally followed by
+// " bytes" to write a single byte instead of a word, e.g.
+// "ms 100260=012706", "memset 100260 012706 bytes".
+void CmdSetMemory(const ConsoleCommandParams& params)
+{
+    uint16_t address = params.paramOct1;
+    uint16_t value = params.paramOct2;
+    bool okBytes = (params.paramFlags & MEMFLAG_BYTES) != 0;
+
+    if (okBytes && value > 0377)
+    {
+        TCHAR bufValue[7];
+        PrintOctalValue(bufValue, value);
+        std::wcout << L"Value out of range for a byte (max 000377): " << bufValue << std::endl;
+        return;
+    }
+
+    CProcessor* pProc = GetCurrentProcessor();
+    bool okHaltMode = pProc->IsHaltMode();
+
+    TCHAR bufAddr[7];
+    PrintOctalValue(bufAddr, address);
+    TCHAR bufValue[7];
+    PrintOctalValue(bufValue, value);
+
+    if (okBytes)
+    {
+        g_pBoard->SetByte(address, okHaltMode, (uint8_t)value);
+        std::wcout << L"Set byte at " << bufAddr << L" to " << (bufValue + 3) << std::endl;
+    }
+    else
+    {
+        g_pBoard->SetWord(address, okHaltMode, value);
+        std::wcout << L"Set word at " << bufAddr << L" to " << bufValue << std::endl;
+    }
 }
 
 // Run until a breakpoint is hit, or until maxFrames frames have been run.
@@ -1270,6 +1309,7 @@ enum ConsoleCommandArgInfo
     ARGINFO_FILENAME,       // A space then a filename (rest of the line, verbatim)
     ARGINFO_OPT_FILENAME,   // Optional: either bare command, or space + filename
     ARGINFO_OCT_MODIFIERS,  // Optional address, then any combination of postfix modifiers
+    ARGINFO_OCT_EQ_OCT,     // "ADDR=VALUE" or "ADDR VALUE", then optional " bytes"
 };
 
 typedef void (*CONSOLE_COMMAND_CALLBACK)(const ConsoleCommandParams& params);
@@ -1363,10 +1403,13 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"t",     ARGINFO_OCT,     CmdTraceLogWithMask },           // tXXXXXX
     { L"trace", ARGINFO_NONE,    CmdTraceLogOnOff },              // trace
     { L"t",     ARGINFO_NONE,    CmdTraceLogOnOff },              // t
-    { L"examine", ARGINFO_OCT_MODIFIERS, CmdExamineMemory },      // examine [XXXXXX] [bytes] [hex] [nochars]
-    { L"x",       ARGINFO_OCT_MODIFIERS, CmdExamineMemory },      // x[XXXXXX] [bytes] [hex] [nochars]
+    { L"memory", ARGINFO_OCT_MODIFIERS, CmdShowMemory },      // memory [XXXXXX] [bytes] [hex] [nochars]
+    { L"m",      ARGINFO_OCT_MODIFIERS, CmdShowMemory },      // m[XXXXXX] [bytes] [hex] [nochars]
+    { L"memset", ARGINFO_OCT_EQ_OCT,    CmdSetMemory },       // memset ADDR=VALUE [bytes]
+    { L"ms",     ARGINFO_OCT_EQ_OCT,    CmdSetMemory },       // ms ADDR=VALUE [bytes]
 
     { L"continue frames ", ARGINFO_DEC, CmdRunFrames },             // continue frames N (decimal)
+    { L"cf",    ARGINFO_DEC,    CmdRunFrames },                     // cfN (decimal)
     { L"continue ", ARGINFO_OCT, CmdRunToAddress },                 // continue XXXXXX
     { L"continue",  ARGINFO_NONE, CmdRun },                         // continue
     { L"c",     ARGINFO_OCT,     CmdRunToAddress },                 // cXXXXXX
@@ -1453,6 +1496,57 @@ bool MatchCommand(const std::wstring& command, const ConsoleCommandStruct& cmd, 
             return true;
         }
 
+    case ARGINFO_OCT_EQ_OCT:
+        {
+            // "ADDR=VALUE" or "ADDR VALUE", optionally with one leading
+            // space before ADDR too (so both "ms1000=123" and "ms 1000=123"
+            // work), then optional " bytes" at the end.
+            size_t startPos = 0;
+            if (!rest.empty() && rest[0] == L' ')
+                startPos = 1;
+            if (startPos >= rest.size() || !iswdigit(rest[startPos]))
+                return false;
+
+            size_t pos = startPos;
+            while (pos < rest.size() && rest[pos] >= L'0' && rest[pos] <= L'7')
+                pos++;
+            std::wstring addrToken = rest.substr(startPos, pos - startPos);
+            if (addrToken.empty())
+                return false;
+
+            if (pos >= rest.size() || (rest[pos] != L'=' && rest[pos] != L' '))
+                return false;
+            pos++;  // skip the '=' or ' '
+
+            size_t valueStart = pos;
+            while (pos < rest.size() && rest[pos] >= L'0' && rest[pos] <= L'7')
+                pos++;
+            std::wstring valueToken = rest.substr(valueStart, pos - valueStart);
+            if (valueToken.empty())
+                return false;
+
+            // Optional trailing " bytes"
+            if (pos < rest.size())
+            {
+                std::wstring trailing = rest.substr(pos);
+                if (trailing == L" bytes")
+                    params.paramFlags |= MEMFLAG_BYTES;
+                else
+                    return false;  // anything else trailing is not recognized
+            }
+
+            uint16_t addrValue = 0;
+            for (wchar_t ch : addrToken)
+                addrValue = (uint16_t)((addrValue << 3) + (ch - L'0'));
+            uint16_t dataValue = 0;
+            for (wchar_t ch : valueToken)
+                dataValue = (uint16_t)((dataValue << 3) + (ch - L'0'));
+
+            params.paramOct1 = addrValue;
+            params.paramOct2 = dataValue;
+            return true;
+        }
+
     case ARGINFO_FILENAME:
         {
             // Expect a single space then a non-empty filename, e.g. "screen shot.png"
@@ -1479,11 +1573,11 @@ bool MatchCommand(const std::wstring& command, const ConsoleCommandStruct& cmd, 
     case ARGINFO_OCT_MODIFIERS:
         {
             // Optional address -- either glued directly to the prefix
-            // ("x100260") or separated by one space ("x 100260") -- then
+            // ("m100260") or separated by one space ("m 100260") -- then
             // zero or more space-separated modifier words in any
             // order/combination ("bytes", "hex", "nochars"), e.g.:
-            //   "x", "x100260", "x hex", "x100260 bytes hex nochars",
-            //   "x 100260 bytes hex nochars"
+            //   "m", "m100260", "m hex", "m100260 bytes hex nochars",
+            //   "m 100260 bytes hex nochars"
             size_t pos = 0;
 
             // Peek at the first token, whether glued (no leading space) or
@@ -1523,11 +1617,11 @@ bool MatchCommand(const std::wstring& command, const ConsoleCommandStruct& cmd, 
                     return false;  // double space or trailing space -- reject rather than silently ignore
 
                 if (word == L"bytes")
-                    params.paramFlags |= EXAMFLAG_BYTES;
+                    params.paramFlags |= MEMFLAG_BYTES;
                 else if (word == L"hex")
-                    params.paramFlags |= EXAMFLAG_HEX;
+                    params.paramFlags |= MEMFLAG_HEX;
                 else if (word == L"nochars")
-                    params.paramFlags |= EXAMFLAG_NOCHARS;
+                    params.paramFlags |= MEMFLAG_NOCHARS;
                 else
                     return false;  // Unknown modifier word
 
@@ -1561,7 +1655,7 @@ void ClearPendingContinuation()
     g_continuation.kind = ContinuationKind::None;
 }
 
-// Print the next page for the armed continuation (examine or disasm),
+// Print the next page for the armed continuation (memory or disasm),
 // picking up exactly where the previous page left off, and re-arm for
 // the page after that. Does nothing if no continuation is armed.
 void RunPendingContinuation()
@@ -1572,10 +1666,10 @@ void RunPendingContinuation()
     ContinuationState state = g_continuation;  // Local copy: handlers below overwrite g_continuation
     CProcessor* pProc = GetCurrentProcessor();
 
-    if (state.kind == ContinuationKind::Examine)
+    if (state.kind == ContinuationKind::Memory)
     {
         uint16_t nextAddress;
-        PrintMemoryDumpGeneric(pProc, state.address, state.examineFlags, 8, &nextAddress);
+        PrintMemoryDumpGeneric(pProc, state.address, state.memoryFlags, 8, &nextAddress);
         state.address = nextAddress;
         ArmContinuation(state);
     }

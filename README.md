@@ -85,7 +85,7 @@ Configuration: BK-0011M-FDD
 Use 'h' command to show help.
 140000> diskA attach rt11.img
 Attached diskA: rt11.img
-140000> continue frames 750
+140000> cf750
  Stopped at 162646
 162646> i floppy
 Floppy engine: ON
@@ -108,13 +108,13 @@ during the read bursts and idle once the system reaches its prompt.
 
 Single-letter commands never take a space before their argument (`d100260`, `r0=123`); full-word
 commands always do (`disasm 100260`, `continue frames 10`). Numeric arguments are octal
-throughout, **except** the frame count in `continue frames N`, which is decimal.
+throughout, **except** the frame count in `continue frames N`/`cfN`, which is decimal.
 
-Commands that change state (registers, breakpoints, reset, file/disk operations) print a short
-confirmation line. `disasm`/`d`/`D` and `examine`/`x` page their output 8 lines at a time: after
-a page, the prompt becomes `-- more (Enter to continue) --`; pressing Enter shows the next page
-at the same address/format/modifiers, and any other input just cancels paging (that input is
-discarded, not run as a command) and returns to the normal prompt.
+Commands that change state (registers, memory, breakpoints, reset, file/disk operations) print a
+short confirmation line. `disasm`/`d`/`D` and `memory`/`m` page their output 8 lines at a time:
+after a page, the prompt becomes `-- more (Enter to continue) --`; pressing Enter shows the next
+page at the same address/format/modifiers, and any other input just cancels paging (that input
+is discarded, not run as a command) and returns to the normal prompt.
 
 ### Help
 
@@ -130,7 +130,7 @@ discarded, not run as a command) and returns to the normal prompt.
 | `reset` | Reset the machine; confirms with `Reset.` |
 | `c`, `continue` | Continue; free run (gives up after 3000 frames if no breakpoint is hit) |
 | `cXXXXXX`, `continue XXXXXX` | Continue; run and stop at address `XXXXXX` |
-| `continue frames N` | Continue; run for exactly `N` frames (decimal; 25 frames = 1 second) |
+| `continue frames N`, `cfN` | Continue; run for exactly `N` frames (decimal; 25 frames = 1 second) |
 | `s`, `step` | Step Into; execute one instruction |
 | `n`, `next` | Step Over; execute the current instruction and stop right after it (steps over `CALL`/`JSR`) |
 
@@ -154,15 +154,18 @@ discarded, not run as a command) and returns to the normal prompt.
 | `d`, `disasm` | Disassemble from PC (paged) |
 | `D` | Disassemble from PC, short format (no raw opcode words) |
 | `dXXXXXX`, `disasm XXXXXX` | Disassemble from address `XXXXXX` |
-| `x`, `examine` | Examine memory at PC (paged) |
-| `xXXXXX`, `examine XXXXXX` | Examine memory at address `XXXXXX` |
+| `m`, `memory` | Examine memory at PC (paged) |
+| `mXXXXXX`, `memory XXXXXX` | Examine memory at address `XXXXXX` |
+| `ms ADDR=VALUE`, `memset ADDR=VALUE` | Set the word at `ADDR` to `VALUE`; confirms with `Set word at ADDR to VALUE` |
+| `ms ADDR=VALUE bytes` | Same, but writes one byte instead of a word |
 | `... bytes` | Modifier: byte granularity instead of words |
 | `... hex` | Modifier: hexadecimal (uppercase `A`-`F`) instead of octal |
 | `... nochars` | Modifier: hide the trailing ASCII/character column |
 
-Modifiers go after the address, in any order, e.g. `x100260 bytes hex` or `examine hex nochars`.
+Modifiers go after the address, in any order, e.g. `m100260 bytes hex` or `memory hex nochars`.
 Values that changed since the last step/run are highlighted (in a terminal that supports color;
-suppressed automatically otherwise).
+suppressed automatically otherwise). `ms`/`memset` write through `SetByte`/`SetWord`, the same
+path the CPU itself uses, so writes work for both RAM and memory-mapped I/O ports.
 
 ### Breakpoints
 
@@ -181,11 +184,27 @@ suppressed automatically otherwise).
 | `t`, `trace` | Toggle instruction tracing to `trace.log` on/off |
 | `tXXXXXX`, `trace XXXXXX` | Set the trace mask explicitly (see `TRACE_xxx` in `emubase/Board.h`) |
 | `tc`, `t clear`, `trace clear` | Clear `trace.log` |
-| `mo`, `monitor` | Type `M` `O` `Enter` (BASIC) or `P` `SPACE` `M` `Enter` (FOCAL) to exit to the monitor |
 
 Tracing only captures execution driven by `continue`/`c` (and the run-to-breakpoint path of
 `next`/`n`); single `step`/`s` does not go through the same code path and produces no trace
 output.
+
+### Keyboard
+
+| Command | Description |
+|---|---|
+| `kd KEY`, `key down KEY` | Press and hold `KEY` |
+| `ku KEY`, `key up KEY` | Release `KEY` |
+| `k KEY`, `key KEY` | Click `KEY`: press, wait, release |
+| `k MOD+KEY`, `key MOD+KEY` | Hold `MOD`, click `KEY`, release `MOD` |
+| `mo`, `monitor` | Type `M` `O` `Enter` (BASIC) or `P` `SPACE` `M` `Enter` (FOCAL) to exit to the monitor |
+
+`KEY`/`MOD` is a letter, digit, punctuation character, named key, or a raw octal scancode.
+Named keys: `ENTER` `SPACE` `TAB` `BACKSPACE` `LEFT` `RIGHT` `UP` `DOWN` `RUS` `LAT` `VS`
+`REPEAT` `LOWER` `UPPER` `STOP` `AR2` `SHIFT` `SU`. `AR2`/`SHIFT`/`SU` are the three BK keyboard
+modifiers and only take effect while held — use them as `MOD` in `key MOD+KEY`, e.g. `k SU+Z`
+or `k AR2+Z`. Scancodes match BKBTL's own `emulator/KeyboardView.cpp`, so the same key works
+whether named or given as a raw octal code (e.g. `k A` and `k 0101` are identical).
 
 ### Files and floppy images
 
