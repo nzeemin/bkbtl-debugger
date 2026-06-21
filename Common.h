@@ -109,6 +109,11 @@ uint16_t Translate_BK_Unicode(uint8_t ch);
 // command-line argument handling). Uses the current C locale.
 std::string WStringToNarrowString(const std::wstring& ws);
 
+// Portable case-insensitive wide string equality check (avoids relying on
+// _wcsicmp, which is MSVC-only, or wcscasecmp, which isn't universally
+// available either).
+bool WStringEqualsIgnoreCase(const std::wstring& a, const std::wstring& b);
+
 // Convert a plain narrow std::string to a TCHAR string. Under GCC/Clang,
 // TCHAR is char, so this is a no-op copy; under real MSVC, TCHAR is
 // wchar_t, so this widens via the current C locale. Use this (rather than

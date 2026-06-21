@@ -47,21 +47,6 @@ const ConfigurationNameStruct ConfigurationNames[] =
 };
 const size_t ConfigurationNamesCount = sizeof(ConfigurationNames) / sizeof(ConfigurationNames[0]);
 
-// Portable case-insensitive wide string equality check (avoids relying on
-// _wcsicmp, which is MSVC-only, or wcscasecmp, which isn't universally
-// available either).
-bool WStringEqualsIgnoreCase(const std::wstring& a, const std::wstring& b)
-{
-    if (a.size() != b.size())
-        return false;
-    for (size_t i = 0; i < a.size(); i++)
-    {
-        if (towlower(a[i]) != towlower(b[i]))
-            return false;
-    }
-    return true;
-}
-
 // Look up a configuration by name (case-insensitive). Returns true and
 // fills *pConfiguration on success.
 bool FindConfigurationByName(const std::wstring& name, BKConfiguration* pConfiguration)

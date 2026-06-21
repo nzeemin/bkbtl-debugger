@@ -376,6 +376,7 @@ struct ConsoleCommandParams
     std::wstring paramFilename;
     uint32_t paramFlags = 0;     // Modifier postfix flags, see EXAMFLAG_xxx
     bool paramHasAddress = false; // Whether an explicit address was given (vs PC default)
+    size_t paramPrefixLength = 0; // Length of the table prefix that matched commandText
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -428,6 +429,13 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  diskN detach, diskN d  Detach floppy image from drive N; N=A..D\n"
         L"  screen [FILE]  Save black/white screenshot as FILE (PNG); default filename from timestamp\n"
         L"  screenc [FILE] Save color screenshot as FILE (PNG); default filename from timestamp\n"
+        L"  kd KEY, key down KEY    Press and hold KEY\n"
+        L"  ku KEY, key up KEY      Release KEY\n"
+        L"  k KEY, key KEY          Click KEY: press, wait, release\n"
+        L"  k MOD+KEY, key MOD+KEY  Hold MOD, click KEY, release MOD\n"
+        L"                 KEY/MOD = letter, digit, punctuation, named key, or octal scancode\n"
+        L"                 Named keys: ENTER SPACE TAB BACKSPACE LEFT RIGHT UP DOWN RUS LAT VS\n"
+        L"                 REPEAT LOWER UPPER STOP AR2 SHIFT SU (AR2/SHIFT/SU are modifiers)\n"
         L"  mo, monitor    Type M O / Enter (BASIC) or P SPACE M / Enter (FOCAL) to exit to Monitor\n"
         L"  q, quit, exit  Quit the debugger\n";
 }
@@ -953,6 +961,208 @@ void CmdGotoMonitor(const ConsoleCommandParams& /*params*/)
     GotoMonitor();
 }
 
+//////////////////////////////////////////////////////////////////////
+// "key down KEY" / "kd KEY", "key up KEY" / "ku KEY", "key KEY" / "k KEY",
+// "key MOD+KEY" / "k MOD+KEY" -- inject individual keyboard events.
+//
+// Scancodes are from BKBTL's emulator/KeyboardView.cpp (m_arrKeyboardKeys1 /
+// m_arrKeyboardKeys2 -- same scancodes for both BK-0010 and BK-0011M, only
+// the GUI layout differs between the two tables). Letters/digits/punctuation
+// use the BK key that carries that unshifted character; e.g. "key :" and
+// "key 0072" are the same key, and so is "key ;" via 0073 -- they are two
+// different physical keys, not shifted variants of one another, because
+// that's how the real BK keyboard matrix is laid out.
+
+struct NamedKey
+{
+    const wchar_t* name;
+    uint8_t scancode;
+};
+
+const NamedKey g_namedKeys[] =
+{
+    // Letters (BK scancode == ASCII code of the Latin letter on that key)
+    { L"A", 0101 }, { L"B", 0102 }, { L"C", 0103 }, { L"D", 0104 },
+    { L"E", 0105 }, { L"F", 0106 }, { L"G", 0107 }, { L"H", 0110 },
+    { L"I", 0111 }, { L"J", 0112 }, { L"K", 0113 }, { L"L", 0114 },
+    { L"M", 0115 }, { L"N", 0116 }, { L"O", 0117 }, { L"P", 0120 },
+    { L"Q", 0121 }, { L"R", 0122 }, { L"S", 0123 }, { L"T", 0124 },
+    { L"U", 0125 }, { L"V", 0126 }, { L"W", 0127 }, { L"X", 0130 },
+    { L"Y", 0131 }, { L"Z", 0132 },
+    // Digits
+    { L"0", 0060 }, { L"1", 0061 }, { L"2", 0062 }, { L"3", 0063 },
+    { L"4", 0064 }, { L"5", 0065 }, { L"6", 0066 }, { L"7", 0067 },
+    { L"8", 0070 }, { L"9", 0071 },
+    // Punctuation, named by the unshifted character on that key
+    { L";",  0073 }, { L"-",  0055 }, { L"/",  0057 }, { L":",  0072 },
+    { L",",  0054 }, { L".",  0056 }, { L"\\", 0134 }, { L"[",  0133 },
+    { L"]",  0135 },
+    // Named special keys
+    { L"ENTER",     0012 },
+    { L"SPACE",     0040 },
+    { L"TAB",       0015 },
+    { L"BACKSPACE", 0030 },
+    { L"LEFT",      0010 },
+    { L"RIGHT",     0031 },
+    { L"UP",        0032 },
+    { L"DOWN",      0033 },
+    { L"RUS",       0016 },
+    { L"LAT",       0017 },
+    { L"VS",        0023 },  // ВС -- line feed / "СТРОКА ВВЕРХ"
+    { L"REPEAT",    BK_KEY_REPEAT },
+    { L"LOWER",     BK_KEY_LOWER },     // СТР -- lowercase lock
+    { L"UPPER",     BK_KEY_UPPER },     // ЗАГЛ -- uppercase lock
+    { L"STOP",      BK_KEY_STOP },
+    // Modifiers -- only take effect while held; see "key MOD+KEY" below
+    { L"AR2",       BK_KEY_AR2 },       // additional register / АР2
+    { L"SHIFT",     BK_KEY_BACKSHIFT }, // small arrow down / lowercase-while-held
+    { L"SU",        0000 },             // СУ -- control-code mode while held
+};
+const size_t g_namedKeysCount = sizeof(g_namedKeys) / sizeof(g_namedKeys[0]);
+
+// How long a plain (non-modifier) key event is held visible to the
+// emulator, in frames, before the matching press/release counterpart.
+const int KEY_HOLD_FRAMES = 3;
+// Same, but for a modifier held around another key in "key MOD+KEY".
+const int KEY_MODIFIER_HOLD_FRAMES = 1;
+
+// Look up a key by name (case-insensitive) or by raw octal scancode
+// (digits only, e.g. "0102"). Returns true and fills *pScancode on success.
+bool FindNamedKey(const std::wstring& name, uint8_t* pScancode)
+{
+    bool okAllOctalDigits = !name.empty();
+    for (wchar_t ch : name)
+        if (ch < L'0' || ch > L'7') { okAllOctalDigits = false; break; }
+    if (okAllOctalDigits)
+    {
+        uint16_t value = 0;
+        for (wchar_t ch : name)
+            value = (uint16_t)((value << 3) + (ch - L'0'));
+        if (value > 0377)
+            return false;
+        *pScancode = (uint8_t)value;
+        return true;
+    }
+
+    for (size_t i = 0; i < g_namedKeysCount; i++)
+    {
+        if (WStringEqualsIgnoreCase(name, g_namedKeys[i].name))
+        {
+            *pScancode = g_namedKeys[i].scancode;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Press (or release) one key and pump enough frames for the emulator to
+// see it, the same way mo/TypeKey above does for a press+release pair.
+void SetKeyState(uint8_t scancode, bool okPressed, bool okAr2, int holdFrames)
+{
+    Emulator_KeyEvent(scancode, okPressed, okAr2);
+    PumpFrames(holdFrames);
+}
+
+// "key MOD+KEY": hold MOD, click KEY, release MOD, per the timing in the
+// class comment above -- 1 frame around the modifier's own press/release,
+// 3 frames around the target key's press/release (the final 3-frame wait
+// after releasing MOD is deliberate: it's there so back-to-back "key ..."
+// commands don't run together).
+void ClickKeyWithModifier(uint8_t modScancode, uint8_t keyScancode)
+{
+    bool okAr2 = (modScancode == BK_KEY_AR2);
+    SetKeyState(modScancode, true, okAr2, KEY_MODIFIER_HOLD_FRAMES);
+    SetKeyState(keyScancode, true, okAr2, KEY_HOLD_FRAMES);
+    SetKeyState(keyScancode, false, okAr2, KEY_MODIFIER_HOLD_FRAMES);
+    SetKeyState(modScancode, false, false, KEY_HOLD_FRAMES);
+}
+
+// "key KEY" with no modifier: press, hold, release, hold.
+void ClickKey(uint8_t scancode)
+{
+    SetKeyState(scancode, true, false, KEY_HOLD_FRAMES);
+    SetKeyState(scancode, false, false, KEY_HOLD_FRAMES);
+}
+
+// Parse "KEY" or "MOD+KEY" out of params.commandText, given the prefix
+// length the matched table row consumed (params.paramPrefixLength, set by
+// MatchCommand -- this is the single source of truth for where the key
+// spec starts, so CmdKeyDown/CmdKeyUp/CmdKeyClick don't each need their
+// own logic to figure out whether "kd"/"ku"/"k" or "key down"/"key up"/
+// "key" matched). paramPrefixLength covers only the literal table prefix
+// (e.g. 2 for "kd", 8 for "key down"); the single space that ARGINFO_FILENAME
+// requires right after it is not included, so it's skipped here. Reports
+// an error and returns false if anything doesn't parse.
+bool ParseKeySpec(const ConsoleCommandParams& params, size_t prefixLength,
+                   uint8_t* pScancode, uint8_t* pModScancode, bool* pHasModifier)
+{
+    std::wstring spec = params.commandText.substr(prefixLength + 1);
+    *pHasModifier = false;
+
+    size_t plusPos = spec.find(L'+');
+    if (plusPos != std::wstring::npos)
+    {
+        std::wstring modName = spec.substr(0, plusPos);
+        std::wstring keyName = spec.substr(plusPos + 1);
+        if (!FindNamedKey(modName, pModScancode))
+        {
+            std::wcout << L"Unknown modifier key: " << modName << std::endl;
+            return false;
+        }
+        if (!FindNamedKey(keyName, pScancode))
+        {
+            std::wcout << L"Unknown key: " << keyName << std::endl;
+            return false;
+        }
+        *pHasModifier = true;
+        return true;
+    }
+
+    if (!FindNamedKey(spec, pScancode))
+    {
+        std::wcout << L"Unknown key: " << spec << std::endl;
+        return false;
+    }
+    return true;
+}
+
+void CmdKeyDown(const ConsoleCommandParams& params)
+{
+    uint8_t scancode, modScancode;
+    bool okHasModifier;
+    if (!ParseKeySpec(params, params.paramPrefixLength, &scancode, &modScancode, &okHasModifier))
+        return;
+
+    if (okHasModifier)
+        SetKeyState(modScancode, true, (modScancode == BK_KEY_AR2), KEY_MODIFIER_HOLD_FRAMES);
+    SetKeyState(scancode, true, (okHasModifier && modScancode == BK_KEY_AR2), KEY_HOLD_FRAMES);
+}
+
+void CmdKeyUp(const ConsoleCommandParams& params)
+{
+    uint8_t scancode, modScancode;
+    bool okHasModifier;
+    if (!ParseKeySpec(params, params.paramPrefixLength, &scancode, &modScancode, &okHasModifier))
+        return;
+
+    SetKeyState(scancode, false, (okHasModifier && modScancode == BK_KEY_AR2), KEY_MODIFIER_HOLD_FRAMES);
+    if (okHasModifier)
+        SetKeyState(modScancode, false, false, KEY_HOLD_FRAMES);
+}
+
+void CmdKeyClick(const ConsoleCommandParams& params)
+{
+    uint8_t scancode, modScancode;
+    bool okHasModifier;
+    if (!ParseKeySpec(params, params.paramPrefixLength, &scancode, &modScancode, &okHasModifier))
+        return;
+
+    if (okHasModifier)
+        ClickKeyWithModifier(modScancode, scancode);
+    else
+        ClickKey(scancode);
+}
+
 // Set the board's trace mask and report the new state.
 // Mirrors ConsoleView_TraceLog: turning tracing off also closes the log
 // file handle so trace.log is flushed and available immediately.
@@ -1139,6 +1349,13 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"monitor", ARGINFO_NONE,   CmdGotoMonitor },
     { L"mo",      ARGINFO_NONE,   CmdGotoMonitor },
 
+    { L"key down", ARGINFO_FILENAME, CmdKeyDown },   // key down KEY, key down MOD+KEY
+    { L"kd",       ARGINFO_FILENAME, CmdKeyDown },   // kd KEY, kd MOD+KEY
+    { L"key up",   ARGINFO_FILENAME, CmdKeyUp },     // key up KEY, key up MOD+KEY
+    { L"ku",       ARGINFO_FILENAME, CmdKeyUp },     // ku KEY, ku MOD+KEY
+    { L"key",      ARGINFO_FILENAME, CmdKeyClick },  // key KEY, key MOD+KEY
+    { L"k",        ARGINFO_FILENAME, CmdKeyClick },  // k KEY, k MOD+KEY
+
     { L"tc",    ARGINFO_NONE,    CmdClearTraceLog },              // tc
     { L"trace clear", ARGINFO_NONE, CmdClearTraceLog },           // trace clear
     { L"t clear", ARGINFO_NONE,  CmdClearTraceLog },               // t clear
@@ -1171,6 +1388,7 @@ bool MatchCommand(const std::wstring& command, const ConsoleCommandStruct& cmd, 
     if (command.compare(0, prefix.size(), prefix) != 0)
         return false;
     std::wstring rest = command.substr(prefix.size());
+    params.paramPrefixLength = prefix.size();
 
     switch (cmd.arginfo)
     {

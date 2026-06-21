@@ -237,6 +237,18 @@ std::string WStringToNarrowString(const std::wstring& ws)
     return std::string(buf.data());
 }
 
+bool WStringEqualsIgnoreCase(const std::wstring& a, const std::wstring& b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (size_t i = 0; i < a.size(); i++)
+    {
+        if (towlower(a[i]) != towlower(b[i]))
+            return false;
+    }
+    return true;
+}
+
 // Template helper so only the branch matching TCHAR's actual type needs to
 // type-check: plain "if constexpr" inside a non-template function still
 // requires both branches to be well-formed even though only one runs, which

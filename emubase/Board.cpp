@@ -114,6 +114,7 @@ void CMotherboard::Reset()
     m_Port177660 = 0100;
     m_Port177662rd = 0;
     m_Port177662wr = 047400;
+    m_nKbdIrqPending = 0;
     m_Port177664 = 01330;
     m_Port177714in = m_Port177714out = 0;
     m_Port177716 = ((m_Configuration & BK_COPT_BK0011) ? 0140000 : 0100000) | 0300;
@@ -313,10 +314,11 @@ void CMotherboard::TimerTick() // Timer Tick, 31250 Hz = 32 мкс (BK-0011), 23
                 m_timerflags &= ~16;
 
             m_timer = m_timerreload;
-        }
 
-        if ((m_timerflags & 4) != 0)  // If EXPENABLE
-            m_timerflags |= 128;  // Set EXPIRY bit
+            if ((m_timerflags & 4) != 0)  // If EXPENABLE
+                m_timerflags |= 128;  // Set EXPIRY bit
+        }
+        // In WRAPAROUND mode the EXPIRY bit is never set, regardless of EXPENABLE
     }
 }
 
@@ -329,6 +331,7 @@ void CMotherboard::SetTimerState(uint16_t val) // Sets timer state, write to por
 {
     //DebugPrintFormat(_T("SetTimerState %06o\r\n"), val);
     m_timer = m_timerreload;
+    m_timerdivider = 0;
 
     m_timerflags = 0177400 | val;
 }
@@ -523,10 +526,20 @@ void CMotherboard::KeyboardEvent(uint8_t scancode, bool okPressed, bool okAr2)
     {
         m_Port177662rd = scancode & 0177;
         m_Port177660 |= 0200;  // "Key ready" flag in keyboard state register
-        if ((m_Port177660 & 0100) == 0100)  // Keyboard interrupt enabled
+
+        uint16_t intvec = ((okAr2 || (scancode & 0200) != 0) ? 0274 : 060);
+        if ((m_Port177660 & 0100) == 0)  // Bit 6 clear == keyboard interrupt enabled (unmasked)
         {
-            uint16_t intvec = ((okAr2 || (scancode & 0200) != 0) ? 0274 : 060);
             m_pCPU->InterruptVIRQ(1, intvec);
+        }
+        else
+        {
+            // Interrupt is masked right now. Remember the vector so that if/when
+            // software unmasks it (clears bit 6) while this key is still "ready",
+            // the interrupt fires then -- this is what real BK0010 hardware does,
+            // and what lets a key event survive across a mask/unmask sequence
+            // performed entirely in software (e.g. BASIC's startup code).
+            m_nKbdIrqPending = intvec;
         }
     }
 }
@@ -813,6 +826,7 @@ uint16_t CMotherboard::GetPortWord(uint16_t address)
         return m_Port177660;
     case 0177662:  // Keyboard register
         m_Port177660 &= ~0200;  // Reset "Ready" bit
+        m_nKbdIrqPending = 0;  // The key was consumed by polling; cancel any deferred interrupt for it
         return m_Port177662rd;
 
     case 0177664:  // Scroll register
@@ -1025,7 +1039,24 @@ void CMotherboard::SetPortWord(uint16_t address, uint16_t word)
         break;
 
     case 0177660:  // Keyboard status register
-        //TODO
+        {
+            // Only bit 6 (0100, keyboard interrupt mask) is writable from software;
+            // bit 7 (0200, key ready) is read-only and other bits are unused.
+            // Bit 6 = 0 means interrupts are enabled (unmasked), 1 means masked --
+            // this is the real BK0010 polarity, confirmed by GID's emulator and by
+            // BASIC's own startup code, which writes 0 here to unmask the keyboard
+            // interrupt once it has installed its keyboard ISR.
+            bool wasMasked = (m_Port177660 & 0100) != 0;
+            m_Port177660 = (m_Port177660 & ~0100) | (word & 0100);
+            bool nowMasked = (m_Port177660 & 0100) != 0;
+            if (wasMasked && !nowMasked && m_nKbdIrqPending != 0)
+            {
+                // A key event arrived while masked and is still unconsumed --
+                // deliver the interrupt now that the mask has been lifted.
+                m_pCPU->InterruptVIRQ(1, m_nKbdIrqPending);
+                m_nKbdIrqPending = 0;
+            }
+        }
         break;
 
     case 0177662:  // Palette register
@@ -1107,7 +1138,8 @@ void CMotherboard::SaveToImage(uint8_t* pImage)
     *pwImage++ = m_Port177716;
     *pwImage++ = m_Port177716mem;
     *pwImage++ = m_Port177716tap;
-    pwImage += 3;  // RESERVED
+    pwImage++;  //TODO m_nKbdIrqPending
+    pwImage += 2;  // RESERVED
     *pwImage++ = m_timer;
     *pwImage++ = m_timerreload;
     *pwImage++ = m_timerflags;
@@ -1129,24 +1161,30 @@ void CMotherboard::LoadFromImage(const uint8_t* pImage)
     const uint16_t* pwImage = reinterpret_cast<const uint16_t*>(pImage + 32);
     m_Configuration = *pwImage++; //TODO: call SetConfiguration() instead
     pwImage += 6;  // RESERVED
-    m_Port177560 = *pwImage++;
-    m_Port177562 = *pwImage++;
-    m_Port177564 = *pwImage++;
-    m_Port177566 = *pwImage++;
-    m_Port177660 = *pwImage++;
-    m_Port177662rd = *pwImage++;
-    m_Port177662wr = *pwImage++;
-    m_Port177664 = *pwImage++;
-    m_Port177714in = *pwImage++;
+    m_Port177560    = *pwImage++;
+    m_Port177562    = *pwImage++;
+    m_Port177564    = *pwImage++;
+    m_Port177566    = *pwImage++;
+    m_Port177660    = *pwImage++;
+    m_Port177662rd  = *pwImage++;
+    m_Port177662wr  = *pwImage++;
+    m_Port177664    = *pwImage++;
+    m_Port177714in  = *pwImage++;
     m_Port177714out = *pwImage++;
-    m_Port177716 = *pwImage++;
+    m_Port177716    = *pwImage++;
     m_Port177716mem = *pwImage++;
     m_Port177716tap = *pwImage++;
-    pwImage += 3;  // RESERVED
+    pwImage++;  //TODO m_nKbdIrqPending
+    pwImage += 2;  // RESERVED
     m_timer = *pwImage++;
     m_timerreload = *pwImage++;
     m_timerflags = *pwImage++;
     m_timerdivider = *pwImage++;
+
+    // Not part of the persisted format -- transient runtime bookkeeping only
+    // (see KeyboardEvent()/SetPortWord(0177660)). Clear it so a stale deferred
+    // interrupt from before the load can't fire spuriously after it.
+    m_nKbdIrqPending = 0;
 
     // CPU status
     const uint8_t* pImageCPU = pImage + 160;
