@@ -968,7 +968,7 @@ void TypeKey(uint8_t scancode)
     Emulator_KeyEvent(scancode, true, false);
     PumpFrames(2);
     Emulator_KeyEvent(scancode, false, false);
-    PumpFrames(2);
+    PumpFrames(4);
 }
 
 // BK keyboard scancodes (octal), same values as the GUI's ConsoleView_GotoMonitor
@@ -1069,6 +1069,15 @@ const int KEY_MODIFIER_HOLD_FRAMES = 1;
 // (digits only, e.g. "0102"). Returns true and fills *pScancode on success.
 bool FindNamedKey(const std::wstring& name, uint8_t* pScancode)
 {
+    for (size_t i = 0; i < g_namedKeysCount; i++)
+    {
+        if (WStringEqualsIgnoreCase(name, g_namedKeys[i].name))
+        {
+            *pScancode = g_namedKeys[i].scancode;
+            return true;
+        }
+    }
+
     bool okAllOctalDigits = !name.empty();
     for (wchar_t ch : name)
         if (ch < L'0' || ch > L'7') { okAllOctalDigits = false; break; }
@@ -1081,15 +1090,6 @@ bool FindNamedKey(const std::wstring& name, uint8_t* pScancode)
             return false;
         *pScancode = (uint8_t)value;
         return true;
-    }
-
-    for (size_t i = 0; i < g_namedKeysCount; i++)
-    {
-        if (WStringEqualsIgnoreCase(name, g_namedKeys[i].name))
-        {
-            *pScancode = g_namedKeys[i].scancode;
-            return true;
-        }
     }
     return false;
 }
