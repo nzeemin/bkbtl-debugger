@@ -116,13 +116,11 @@ void PrintDisassembleLine(uint16_t address, uint16_t value, LPCTSTR instr, LPCTS
 // Returns the number of words in the last instruction disassembled.
 int PrintDisassemble(CProcessor* pProc, uint16_t address, bool okOneInstr, bool okShort, uint16_t* pNextAddress = nullptr)
 {
-    bool okHaltMode = pProc->IsHaltMode();
-
     const int nWindowSize = 30;
     uint16_t memory[nWindowSize + 2];
     int addrtype;
     for (int i = 0; i < nWindowSize + 2; i++)
-        memory[i] = g_pBoard->GetWordView((uint16_t)(address + i * 2), okHaltMode, true, &addrtype);
+        memory[i] = g_pBoard->GetWordView((uint16_t)(address + i * 2), true, &addrtype);
 
     int lastLength = 0;
     int length = 0;
@@ -170,7 +168,6 @@ void PrintMemoryDumpGeneric(const CProcessor* pProc, uint16_t address, uint32_t 
 
     if (!okBytes)
         address &= ~1;  // Word dumps line up to an even address
-    bool okHaltMode = pProc->IsHaltMode();
 
     for (int line = 0; line < lines; line++)
     {
@@ -179,7 +176,7 @@ void PrintMemoryDumpGeneric(const CProcessor* pProc, uint16_t address, uint32_t 
         int addrtype;
         for (int i = 0; i < 8; i++)
         {
-            dump[i] = g_pBoard->GetWordView((uint16_t)(address + i * 2), okHaltMode, false, &addrtype);
+            dump[i] = g_pBoard->GetWordView((uint16_t)(address + i * 2), false, &addrtype);
             changed[i] = addrtype == ADDRTYPE_ROM
                 ? 0
                 : Emulator_GetChangeRamStatus(address + i * 2);
@@ -291,7 +288,7 @@ bool SaveMemoryDump(const std::wstring& wfilename)
 
     std::vector<uint8_t> buf(65536);
     for (int i = 0; i < 65536; i++)
-        buf[i] = g_pBoard->GetByte((uint16_t)i, true);
+        buf[i] = g_pBoard->GetByte((uint16_t)i);
 
     std::ofstream file(narrowFilename.c_str(), std::ios::binary | std::ios::trunc);
     if (!file.is_open())
@@ -340,7 +337,7 @@ std::wstring LoadBin(const std::wstring& wfilename)
     }
 
     for (size_t i = 0; i < dataBytes; i++)
-        g_pBoard->SetByte((uint16_t)(startAddress + i), true, buf[4 + i]);
+        g_pBoard->SetByte((uint16_t)(startAddress + i), buf[4 + i]);
 
     return L"";
 }
@@ -690,7 +687,7 @@ void CmdStepOver(const ConsoleCommandParams& /*params*/)
     int instrLength = PrintDisassemble(pProc, pProc->GetPC(), true, false);
 
     int addrtype;
-    uint16_t instr = g_pBoard->GetWordView(pProc->GetPC(), pProc->IsHaltMode(), true, &addrtype);
+    uint16_t instr = g_pBoard->GetWordView(pProc->GetPC(), true, &addrtype);
 
     // For JMP and BR use Step Into logic, not Step Over -- there's no
     // "next instruction" to break on, since control may not return here.
@@ -863,9 +860,6 @@ void CmdSetMemory(const ConsoleCommandParams& params)
         return;
     }
 
-    CProcessor* pProc = GetCurrentProcessor();
-    bool okHaltMode = pProc->IsHaltMode();
-
     TCHAR bufAddr[7];
     PrintOctalValue(bufAddr, address);
     TCHAR bufValue[7];
@@ -873,12 +867,12 @@ void CmdSetMemory(const ConsoleCommandParams& params)
 
     if (okBytes)
     {
-        g_pBoard->SetByte(address, okHaltMode, (uint8_t)value);
+        g_pBoard->SetByte(address, (uint8_t)value);
         std::wcout << L"Set byte at " << bufAddr << L" to " << (bufValue + 3) << std::endl;
     }
     else
     {
-        g_pBoard->SetWord(address, okHaltMode, value);
+        g_pBoard->SetWord(address, value);
         std::wcout << L"Set word at " << bufAddr << L" to " << bufValue << std::endl;
     }
 }

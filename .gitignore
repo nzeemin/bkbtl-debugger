@@ -2,6 +2,7 @@
 /Release
 /x64
 /bkbtldebug/x64
+/build
 *.ncb
 *.suo
 *.user
