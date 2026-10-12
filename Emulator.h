@@ -56,10 +56,22 @@ void Emulator_KeyEvent(uint8_t keyPressed, bool pressed, bool ctrl);
 uint16_t Emulator_GetKeyEventFromQueue();
 void Emulator_ProcessKeyEvent();
 
-#if !defined(PRODUCT)
-// Set trace flags (TRACE_xxx) and install/remove the instruction callback accordingly
+// Set trace flags (TRACE_xxx)
 void Emulator_SetTrace(uint32_t dwTrace);
-#endif
+
+// Instruction history, recorded always
+const int INSTR_HISTORY_SIZE = 256;  // Must be a power of two
+
+struct InstructionRecord
+{
+    uint16_t pc;
+    uint16_t words[3];  // Opcode and two next words; the instruction is at most 3 words long
+    uint16_t psw;       // Processor status word before the instruction
+};
+
+int Emulator_GetHistoryLength();
+const InstructionRecord& Emulator_GetHistoryRecord(int index);  // index 0 = most recent
+void Emulator_ClearHistory();
 
 // Update cached values after Run or Step
 void Emulator_OnUpdate();

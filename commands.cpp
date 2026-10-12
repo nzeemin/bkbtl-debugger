@@ -420,6 +420,8 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  t, trace       Toggle instruction tracing to trace.log on/off\n"
         L"  tXXXXXX, trace XXXXXX  Set trace flags XXXXXX (see TRACE_xxx constants)\n"
         L"  tc, t clear, trace clear  Clear trace.log\n"
+        L"  l, last        Show last 20 executed CPU instructions\n"
+        L"  lN, last N     Show last N executed instructions, N = 1..256 (decimal)\n"
         L"  memsave [FILE] Save memory dump as FILE; default memdump.bin\n"
         L"  loadbin FILE   Load a .bin file (tape image: start addr + size + data) into RAM\n"
         L"  statesave FILE Save full emulator state (memory, registers, ports) to FILE\n"
@@ -1196,6 +1198,62 @@ void CmdKeyClick(const ConsoleCommandParams& params)
         ClickKey(scancode);
 }
 
+// Print the last "count" executed instructions, oldest first.
+// Line: ADDR: W0 W1 W2  PSW: DISASM, missing operand words padded with blanks.
+void PrintHistory(int count)
+{
+    if (count < 1 || count > INSTR_HISTORY_SIZE)
+    {
+        std::wcout << L"History count must be 1.." << INSTR_HISTORY_SIZE << std::endl;
+        return;
+    }
+    int length = Emulator_GetHistoryLength();
+    if (length == 0)
+    {
+        std::wcout << L"No instructions recorded." << std::endl;
+        return;
+    }
+    if (count > length)
+        count = length;
+
+    for (int index = count - 1; index >= 0; index--)
+    {
+        const InstructionRecord& record = Emulator_GetHistoryRecord(index);
+
+        TCHAR instr[8];
+        TCHAR args[32];
+        int instrLength = DisassembleInstruction(record.words, record.pc, instr, args);
+
+        TCHAR bufAddr[7];
+        PrintOctalValue(bufAddr, record.pc);
+        std::wcout << bufAddr << L":";
+        for (int i = 0; i < 3; i++)
+        {
+            if (i < instrLength)
+            {
+                TCHAR bufWord[7];
+                PrintOctalValue(bufWord, record.words[i]);
+                std::wcout << L" " << bufWord;
+            }
+            else
+                std::wcout << L"       ";
+        }
+        TCHAR bufPsw[7];
+        PrintOctalValue(bufPsw, record.psw);
+        std::wcout << L"  " << bufPsw << L": " << instr << L" " << args << std::endl;
+    }
+}
+
+void CmdHistoryDefault(const ConsoleCommandParams& /*params*/)
+{
+    PrintHistory(20);
+}
+
+void CmdHistoryCount(const ConsoleCommandParams& params)
+{
+    PrintHistory((int)params.paramOct1);
+}
+
 // Set the board's trace mask and report the new state.
 // Mirrors ConsoleView_TraceLog: turning tracing off also closes the log
 // file handle so trace.log is flushed and available immediately.
@@ -1320,6 +1378,10 @@ const ConsoleCommandStruct ConsoleCommands[] =
     { L"?",     ARGINFO_NONE,    CmdShowHelp },
     { L"help",  ARGINFO_NONE,    CmdShowHelp },
     { L"h",     ARGINFO_NONE,    CmdShowHelp },
+    { L"last ", ARGINFO_DEC,     CmdHistoryCount },               // last N (decimal)
+    { L"last",  ARGINFO_NONE,    CmdHistoryDefault },             // last
+    { L"l",     ARGINFO_DEC,     CmdHistoryCount },               // lN (decimal)
+    { L"l",     ARGINFO_NONE,    CmdHistoryDefault },             // l
 
     { L"r",     ARGINFO_REG_OCT, CmdSetRegisterValue },          // rN=XXXXXX
     { L"r",     ARGINFO_REG,     CmdPrintRegister },              // rN

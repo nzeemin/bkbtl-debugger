@@ -184,6 +184,13 @@ path the CPU itself uses, so writes work for both RAM and memory-mapped I/O port
 | `t`, `trace` | Toggle instruction tracing to `trace.log` on/off |
 | `tXXXXXX`, `trace XXXXXX` | Set the trace mask explicitly (see `TRACE_xxx` in `emubase/Board.h`) |
 | `tc`, `t clear`, `trace clear` | Clear `trace.log` |
+| `l`, `last` | Show the last 20 executed CPU instructions |
+| `lN`, `last N` | Show the last `N` executed instructions, `N` = 1..256 (decimal) |
+
+The instruction history is always recorded (a 256-entry ring buffer, cleared by `reset`,
+`stateload` and configuration changes). Output is oldest first, newest last, one line per
+instruction: `ADDR: W0 W1 W2  PSW: DISASM`, where `W0..W2` are the opcode and its operand
+words (blank if absent) and `PSW` is the status word before the instruction executed.
 
 Tracing is done by a CPU instruction callback, so every executed instruction is logged,
 including single `step`/`s` and `next`/`n`.

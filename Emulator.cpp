@@ -49,6 +49,7 @@ static int m_EmulatorKeyQueueBottom = 0;
 static int m_EmulatorKeyQueueCount = 0;
 
 void CALLBACK Emulator_TeletypeCallback(uint8_t symbol);
+void CALLBACK Emulator_Instruction_Callback(const CProcessor* pProc, uint16_t address, uint16_t opcode);
 
 void CALLBACK Emulator_FeedDAC(unsigned short l, unsigned short r);
 
@@ -210,6 +211,8 @@ bool Emulator_Init()
     m_dwEmulatorUptime = 0;
 
     g_pBoard->SetTeletypeCallback(Emulator_TeletypeCallback);
+    Emulator_ClearHistory();
+    g_pBoard->SetInstructionCallback(Emulator_Instruction_Callback);
 
     Emulator_OnUpdate();
 
@@ -372,6 +375,7 @@ bool Emulator_InitConfiguration(BKConfiguration configuration)
     g_nEmulatorConfiguration = configuration;
 
     g_pBoard->Reset();
+    Emulator_ClearHistory();
 
     m_nUptimeFrameCount = 0;
     m_dwEmulatorUptime = 0;
@@ -403,6 +407,7 @@ void Emulator_Reset()
     ASSERT(g_pBoard != nullptr);
 
     g_pBoard->Reset();
+    Emulator_ClearHistory();
 
     m_nUptimeFrameCount = 0;
     m_dwEmulatorUptime = 0;
@@ -741,24 +746,56 @@ void CALLBACK Emulator_TeletypeCallback(uint8_t symbol)
     }
 }
 
-#if !defined(PRODUCT)
+// Instruction history: ring buffer filled by Emulator_Instruction_Callback
+static InstructionRecord m_InstrHistory[INSTR_HISTORY_SIZE];
+static int m_InstrHistoryHead = 0;    // Index of the next record to write
+static int m_InstrHistoryLength = 0;  // Number of valid records
 
-void CALLBACK Emulator_Instruction_Callback(const CProcessor* /*pProc*/, uint16_t address, uint16_t opcode)
+int Emulator_GetHistoryLength()
 {
-    uint32_t dwTrace = g_pBoard->GetTrace();
+    return m_InstrHistoryLength;
+}
 
+// Index 0 is the most recent instruction
+const InstructionRecord& Emulator_GetHistoryRecord(int index)
+{
+    ASSERT(index >= 0 && index < m_InstrHistoryLength);
+    return m_InstrHistory[(m_InstrHistoryHead - 1 - index) & (INSTR_HISTORY_SIZE - 1)];
+}
+
+void Emulator_ClearHistory()
+{
+    m_InstrHistoryHead = 0;
+    m_InstrHistoryLength = 0;
+}
+
+// Called by CPU before each instruction is executed; installed always, records history and writes trace
+void CALLBACK Emulator_Instruction_Callback(const CProcessor* pProc, uint16_t address, uint16_t opcode)
+{
     int instrtype = ADDRTYPE_RAM;  // Address type of the instruction itself
-    g_pBoard->GetWordView(address, true, &instrtype);
-    if (!(instrtype == ADDRTYPE_RAM && (dwTrace & TRACE_CPURAM)) &&
-        !(instrtype == ADDRTYPE_ROM && (dwTrace & TRACE_CPUROM)))
-        return;
-
-    int addrtype = ADDRTYPE_RAM;
     uint16_t memory[4];
     memory[0] = opcode;
+    g_pBoard->GetWordView(address, true, &instrtype);
+    int addrtype = ADDRTYPE_RAM;
     memory[1] = g_pBoard->GetWordView(address + 1 * 2, true, &addrtype);
     memory[2] = g_pBoard->GetWordView(address + 2 * 2, true, &addrtype);
     memory[3] = g_pBoard->GetWordView(address + 3 * 2, true, &addrtype);
+
+    InstructionRecord& record = m_InstrHistory[m_InstrHistoryHead];
+    record.pc = address;
+    record.words[0] = memory[0];
+    record.words[1] = memory[1];
+    record.words[2] = memory[2];
+    record.psw = pProc->GetPSW();
+    m_InstrHistoryHead = (m_InstrHistoryHead + 1) & (INSTR_HISTORY_SIZE - 1);
+    if (m_InstrHistoryLength < INSTR_HISTORY_SIZE)
+        m_InstrHistoryLength++;
+
+#if !defined(PRODUCT)
+    uint32_t dwTrace = g_pBoard->GetTrace();
+    if (!(instrtype == ADDRTYPE_RAM && (dwTrace & TRACE_CPURAM)) &&
+        !(instrtype == ADDRTYPE_ROM && (dwTrace & TRACE_CPUROM)))
+        return;
 
     TCHAR bufaddr[7];
     PrintOctalValue(bufaddr, address);
@@ -777,18 +814,14 @@ void CALLBACK Emulator_Instruction_Callback(const CProcessor* /*pProc*/, uint16_
         _sntprintf(buffer, sizeof(buffer) / sizeof(TCHAR) - 1, _T("%s\t%s\t%s\r\n"), bufaddr, instr, args);
 
     DebugLog(buffer);
+#endif // !PRODUCT
 }
 
-// Set trace flags (TRACE_xxx) and install/remove the CPU instruction callback accordingly
+// Set trace flags (TRACE_xxx); the instruction callback stays installed for the history
 void Emulator_SetTrace(uint32_t dwTrace)
 {
     g_pBoard->SetTrace(dwTrace);
-
-    bool okInstructionTrace = (dwTrace & TRACE_CPU) != 0;
-    g_pBoard->SetInstructionCallback(okInstructionTrace ? Emulator_Instruction_Callback : nullptr);
 }
-
-#endif // !PRODUCT
 
 
 //////////////////////////////////////////////////////////////////////
@@ -873,6 +906,7 @@ bool Emulator_SaveImage(const std::string &sFilePath)
 bool Emulator_LoadImage(const std::string &sFilePath)
 {
     Emulator_Stop();
+    Emulator_ClearHistory();
 
     std::ifstream file(sFilePath, std::ios::in | std::ios::binary);
     if (!file.is_open())
