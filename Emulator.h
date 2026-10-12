@@ -56,6 +56,11 @@ void Emulator_KeyEvent(uint8_t keyPressed, bool pressed, bool ctrl);
 uint16_t Emulator_GetKeyEventFromQueue();
 void Emulator_ProcessKeyEvent();
 
+#if !defined(PRODUCT)
+// Set trace flags (TRACE_xxx) and install/remove the instruction callback accordingly
+void Emulator_SetTrace(uint32_t dwTrace);
+#endif
+
 // Update cached values after Run or Step
 void Emulator_OnUpdate();
 bool Emulator_IsRegisterChanged(int r);

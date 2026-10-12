@@ -388,7 +388,7 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  reset          Reset the machine\n"
         L"  c, continue    Continue; free run\n"
         L"  cXXXXXX, continue XXXXXX  Continue; run and stop at address XXXXXX\n"
-        L"  cfN, continue frames N  Continue; run for N frames, decimal (1 sec = 25 frames)\n"
+        L"  cfN, continue frames N  Continue; run for N frames, decimal (1 sec = 50 frames)\n"
         L"  s, step        Step Into; executes one instruction\n"
         L"  n, next        Step Over (Next); executes and stops after the current instruction\n"
         L"  r, regs        Show register values\n"
@@ -885,8 +885,8 @@ void CmdSetMemory(const ConsoleCommandParams& params)
 // Safety valve: there is no way to interrupt this from another thread (no
 // GUI Stop button, no Ctrl+C handler), so a free run with no breakpoint
 // ever set -- or a breakpoint at an address the CPU never reaches -- would
-// hang the console forever. maxFrames caps it; at 25 frames/sec the default
-// 3000 is ~2 minutes of emulated time before giving up.
+// hang the console forever. maxFrames caps it; at 50 frames/sec the default
+// 3000 is ~1 minute of emulated time before giving up.
 void RunUntilBreakpoint(int maxFrames)
 {
     Emulator_Start();
@@ -1201,7 +1201,7 @@ void CmdKeyClick(const ConsoleCommandParams& params)
 // file handle so trace.log is flushed and available immediately.
 void TraceLog(uint32_t value)
 {
-    g_pBoard->SetTrace(value);
+    Emulator_SetTrace(value);
     if (value != TRACE_NONE)
     {
         TCHAR bufFlags[7];

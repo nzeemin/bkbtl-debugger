@@ -130,7 +130,7 @@ is discarded, not run as a command) and returns to the normal prompt.
 | `reset` | Reset the machine; confirms with `Reset.` |
 | `c`, `continue` | Continue; free run (gives up after 3000 frames if no breakpoint is hit) |
 | `cXXXXXX`, `continue XXXXXX` | Continue; run and stop at address `XXXXXX` |
-| `continue frames N`, `cfN` | Continue; run for exactly `N` frames (decimal; 25 frames = 1 second) |
+| `continue frames N`, `cfN` | Continue; run for exactly `N` frames (decimal; 50 frames = 1 second) |
 | `s`, `step` | Step Into; execute one instruction |
 | `n`, `next` | Step Over; execute the current instruction and stop right after it (steps over `CALL`/`JSR`) |
 
@@ -185,9 +185,8 @@ path the CPU itself uses, so writes work for both RAM and memory-mapped I/O port
 | `tXXXXXX`, `trace XXXXXX` | Set the trace mask explicitly (see `TRACE_xxx` in `emubase/Board.h`) |
 | `tc`, `t clear`, `trace clear` | Clear `trace.log` |
 
-Tracing only captures execution driven by `continue`/`c` (and the run-to-breakpoint path of
-`next`/`n`); single `step`/`s` does not go through the same code path and produces no trace
-output.
+Tracing is done by a CPU instruction callback, so every executed instruction is logged,
+including single `step`/`s` and `next`/`n`.
 
 ### Keyboard
 

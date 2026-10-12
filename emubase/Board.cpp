@@ -15,8 +15,6 @@ BKBTL. If not, see <http://www.gnu.org/licenses/>. */
 #include "Emubase.h"
 #include "Board.h"
 
-void TraceInstruction(const CMotherboard* pBoard, uint16_t address, uint32_t dwTrace);
-
 
 //////////////////////////////////////////////////////////////////////
 
@@ -101,6 +99,11 @@ void CMotherboard::SetTrace(uint32_t dwTrace)
     m_dwTrace = dwTrace;
     if (m_pFloppyCtl != nullptr)
         m_pFloppyCtl->SetTrace((dwTrace & TRACE_FLOPPY) != 0);
+}
+
+void CMotherboard::SetInstructionCallback(INSTRUCTIONCALLBACK callback)
+{
+    m_pCPU->SetInstructionCallback(callback);
 }
 
 void CMotherboard::Reset()
@@ -357,42 +360,38 @@ void CMotherboard::SetSoundAY(bool onoff)
 
 
 /*
-Каждый фрейм равен 1/25 секунды = 40 мс = 20000 тиков, 1 тик = 2 мкс.
+Каждый фрейм равен 1/50 секунды = 20 мс = 10000 тиков, 1 тик = 2 мкс.
 12 МГц = 1 / 12000000 = 0.83(3) мкс
 В каждый фрейм происходит:
-* 120000 тиков ЦП - 6 раз за тик (БК-0010, 12МГц / 4 = 3 МГц, 3.3(3) мкс), либо
-* 160000 тиков ЦП - 8 раз за тик (БК-0011, 12МГц / 3 = 4 МГц, 2.5 мкс)
+* 60000 тиков ЦП - 6 раз за тик (БК-0010, 12МГц / 4 = 3 МГц, 3.3(3) мкс), либо
+* 80000 тиков ЦП - 8 раз за тик (БК-0011, 12МГц / 3 = 4 МГц, 2.5 мкс)
 * программируемый таймер - на каждый 128-й тик процессора; 42.6(6) мкс либо 32 мкс
-* 2 тика IRQ2 50 Гц, в 0-й и 10000-й тик фрейма
-* 625 тиков FDD - каждый 32-й тик (300 RPM = 5 оборотов в секунду)
-* 68571 тиков AY-3-891x: 1.714275 МГц (12МГц / 7 = 1.714 МГц, 5.83(3) мкс)
+* 1 тик IRQ2 50 Гц, в 0-й тик фрейма
+* 312(.5) тиков FDD - каждый 32-й тик (300 RPM = 5 оборотов в секунду)
+* 34285(.5) тиков AY-3-891x: 1.714275 МГц (12МГц / 7 = 1.714 МГц, 5.83(3) мкс)
 */
 bool CMotherboard::SystemFrame()
 {
     int frameProcTicks = (m_Configuration & BK_COPT_BK0011) ? 8 : 6;
-    const int audioticks = 20286 / (SOUNDSAMPLERATE / 25);
+    const int audioticks = 10143 / (SOUNDSAMPLERATE / 50);
     m_SoundChanges = 0;
-    const int teletypeTicks = 20000 / (9600 / 25);
+    const int teletypeTicks = 10000 / (9600 / 50);
     int floppyTicks = 32;  // FDD rotation is a fixed real-time rate (300 RPM), independent of CPU config
     int teletypeTxCount = 0;
 
     int frameTapeTicks = 0, tapeSamplesPerFrame = 0, tapeReadError = 0;
     if (m_TapeReadCallback != nullptr || m_TapeWriteCallback != nullptr)
     {
-        tapeSamplesPerFrame = m_nTapeSampleRate / 25;
-        frameTapeTicks = 20000 / tapeSamplesPerFrame;
+        tapeSamplesPerFrame = m_nTapeSampleRate / 50;
+        frameTapeTicks = 10000 / tapeSamplesPerFrame;
     }
 
     int timerTicks = 0;
 
-    for (int frameticks = 0; frameticks < 20000; frameticks++)
+    for (int frameticks = 0; frameticks < 10000; frameticks++)
     {
         for (int procticks = 0; procticks < frameProcTicks; procticks++)  // CPU ticks
         {
-#if !defined(PRODUCT)
-            if ((m_dwTrace & TRACE_CPU) && m_pCPU->GetInternalTick() == 0)
-                TraceInstruction(this, m_pCPU->GetPC(), m_dwTrace);
-#endif
             m_pCPU->Execute();
             if (m_CPUbps != nullptr)  // Check for breakpoints
             {
@@ -408,7 +407,7 @@ bool CMotherboard::SystemFrame()
             }
         }
 
-        if (frameticks % 10000 == 0)
+        if (frameticks == 0)
         {
             Tick50();  // 1/50 timer event
         }
@@ -425,7 +424,7 @@ bool CMotherboard::SystemFrame()
         if ((m_TapeReadCallback != nullptr || m_TapeWriteCallback != nullptr) && frameticks % frameTapeTicks == 0)
         {
             int tapeSamples = 0;
-            const int readsTotal = 20000 / frameTapeTicks;
+            const int readsTotal = 10000 / frameTapeTicks;
             for (;;)
             {
                 tapeSamples++;
@@ -491,14 +490,14 @@ void CMotherboard::KeyboardEvent(uint8_t scancode, bool okPressed, bool okAr2)
         uint16_t mask = 0;
         switch (scancode)
         {
-        case BK_KEY_JOYSTICK_BUTTON1: mask = 0x01; break;
-        case BK_KEY_JOYSTICK_BUTTON2: mask = 0x02; break;
-        case BK_KEY_JOYSTICK_BUTTON3: mask = 0x04; break;
-        case BK_KEY_JOYSTICK_BUTTON4: mask = 0x08; break;
-        case BK_KEY_JOYSTICK_LEFT:    mask = 0x10; break;
-        case BK_KEY_JOYSTICK_DOWN:    mask = 0x20; break;
-        case BK_KEY_JOYSTICK_RIGHT:   mask = 0x40; break;
-        case BK_KEY_JOYSTICK_UP:      mask = 0x80; break;
+        case BK_KEY_JOYSTICK_BUTTON1: mask = 0x10; break;
+        case BK_KEY_JOYSTICK_BUTTON2: mask = 0x20; break;
+        case BK_KEY_JOYSTICK_BUTTON3: mask = 0x40; break;
+        case BK_KEY_JOYSTICK_BUTTON4: mask = 0x80; break;
+        case BK_KEY_JOYSTICK_LEFT:    mask = 0x08; break;
+        case BK_KEY_JOYSTICK_DOWN:    mask = 0x04; break;
+        case BK_KEY_JOYSTICK_RIGHT:   mask = 0x02; break;
+        case BK_KEY_JOYSTICK_UP:      mask = 0x01; break;
         }
 
         if (okPressed)
@@ -963,6 +962,23 @@ uint16_t CMotherboard::GetPortView(uint16_t address) const
 
 void CMotherboard::SetPortByte(uint16_t address, uint8_t byte)
 {
+    if ((address & 0177776) == 0177662 && (m_Configuration & BK_COPT_BK0011) == 0)
+    {
+        // BK-0010: the register is read-only; reject before the read-modify-write below,
+        // which would otherwise consume the pending key code.
+        m_pCPU->MemoryError();
+        return;
+    }
+
+    if ((address & 0177776) == 0177664)
+    {
+        // Scroll register: byte writes don't work on real hardware -- the whole word is
+        // written with the byte zero-extended (offset = byte, bit 9 cleared), whatever the
+        // address parity.
+        SetPortWord(0177664, byte);
+        return;
+    }
+
     if (address == 0177714 && m_okSoundAY)
     {
         m_pSoundAY->SetReg(m_nSoundAYReg & 0xf, byte ^ 0xff);
@@ -1046,7 +1062,8 @@ void CMotherboard::SetPortWord(uint16_t address, uint16_t word)
 
     case 0177716:  // System register - memory management, tape management
         m_Port177716 |= 4;  // Set bit 2
-        if (word & 04000)
+        // BK-0011 only: bit 11 selects the memory-paging register; BK-0010 has just the tape/speaker one
+        if ((m_Configuration & BK_COPT_BK0011) != 0 && (word & 04000))
         {
             m_Port177716mem = word;
 
@@ -1080,7 +1097,10 @@ void CMotherboard::SetPortWord(uint16_t address, uint16_t word)
         break;
 
     case 0177662:  // Palette register
-        m_Port177662wr = word;
+        if ((m_Configuration & BK_COPT_BK0011) == 0)  // BK-0010: the register is read-only
+            m_pCPU->MemoryError();
+        else
+            m_Port177662wr = word;
         break;
 
     case 0177664:  // Scroll register
@@ -1302,43 +1322,5 @@ void CMotherboard::SetTeletypeCallback(TELETYPECALLBACK callback)
     }
 }
 
-
-//////////////////////////////////////////////////////////////////////
-
-#if !defined(PRODUCT)
-
-void TraceInstruction(const CMotherboard* pBoard, uint16_t address, uint32_t dwTrace)
-{
-    bool okBk11 = (pBoard->GetConfiguration() & BK_COPT_BK0011) != 0;
-
-    uint16_t memory[4];
-    int addrtype = ADDRTYPE_RAM;
-    memory[0] = pBoard->GetWordView(address + 0 * 2, true, &addrtype);
-    if (!(addrtype == ADDRTYPE_RAM && (dwTrace & TRACE_CPURAM)) &&
-        !(addrtype == ADDRTYPE_ROM && (dwTrace & TRACE_CPUROM)))
-        return;
-    memory[1] = pBoard->GetWordView(address + 1 * 2, true, &addrtype);
-    memory[2] = pBoard->GetWordView(address + 2 * 2, true, &addrtype);
-    memory[3] = pBoard->GetWordView(address + 3 * 2, true, &addrtype);
-
-    TCHAR bufaddr[7];
-    PrintOctalValue(bufaddr, address);
-
-    TCHAR instr[8];
-    TCHAR args[32];
-    DisassembleInstruction(memory, address, instr, args);
-    TCHAR buffer[64];
-    if (okBk11 && (addrtype & ADDRTYPE_MASK) == ADDRTYPE_RAM)
-    {
-        int nRamPage = addrtype & 7;
-        _sntprintf(buffer, 64, _T("%d:%s\t%s\t%s\r\n"), nRamPage, bufaddr, instr, args);
-    }
-    else
-        _sntprintf(buffer, 64, _T("%s\t%s\t%s\r\n"), bufaddr, instr, args);
-
-    DebugLog(buffer);
-}
-
-#endif
 
 //////////////////////////////////////////////////////////////////////
