@@ -418,7 +418,7 @@ void CmdShowHelp(const ConsoleCommandParams& /*params*/)
         L"  bc             Remove all breakpoints\n"
         L"  bcXXXXXX       Remove breakpoint at address XXXXXX\n"
         L"  t, trace       Toggle instruction tracing to trace.log on/off\n"
-        L"  tXXXXXX, trace XXXXXX  Set trace flags XXXXXX (see TRACE_xxx constants)\n"
+        L"  tXXXXXX, trace XXXXXX  Set trace flags XXXXXX (1 = ROM code, 2 = RAM code, 4 = interrupts)\n"
         L"  tc, t clear, trace clear  Clear trace.log\n"
         L"  l, last        Show last 20 executed CPU instructions\n"
         L"  lN, last N     Show last N executed instructions, N = 1..256 (decimal)\n"
@@ -1220,12 +1220,24 @@ void PrintHistory(int count)
     {
         const InstructionRecord& record = Emulator_GetHistoryRecord(index);
 
+        TCHAR bufAddr[7];
+        PrintOctalValue(bufAddr, record.pc);
+
+        if (record.interrupt)  // words: vector, new PC, new PSW
+        {
+            TCHAR bufNewPc[7], bufNewPsw[7], bufVector[7];
+            PrintOctalValue(bufNewPc, record.words[1]);
+            PrintOctalValue(bufNewPsw, record.psw);
+            PrintOctalValue(bufVector, record.words[0]);
+            std::wcout << bufAddr << L":              " << L" " << bufNewPc << L"  " << bufNewPsw
+                << L": INT " << bufVector << L" " << Emulator_GetInterruptName(record.words[0]) << std::endl;
+            continue;
+        }
+
         TCHAR instr[8];
         TCHAR args[32];
         int instrLength = DisassembleInstruction(record.words, record.pc, instr, args);
 
-        TCHAR bufAddr[7];
-        PrintOctalValue(bufAddr, record.pc);
         std::wcout << bufAddr << L":";
         for (int i = 0; i < 3; i++)
         {

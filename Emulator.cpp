@@ -50,6 +50,7 @@ static int m_EmulatorKeyQueueCount = 0;
 
 void CALLBACK Emulator_TeletypeCallback(uint8_t symbol);
 void CALLBACK Emulator_Instruction_Callback(const CProcessor* pProc, uint16_t address, uint16_t opcode);
+void CALLBACK Emulator_Interrupt_Callback(const CProcessor* pProc, uint16_t oldPc, uint16_t vector);
 
 void CALLBACK Emulator_FeedDAC(unsigned short l, unsigned short r);
 
@@ -213,6 +214,7 @@ bool Emulator_Init()
     g_pBoard->SetTeletypeCallback(Emulator_TeletypeCallback);
     Emulator_ClearHistory();
     g_pBoard->SetInstructionCallback(Emulator_Instruction_Callback);
+    g_pBoard->SetInterruptCallback(Emulator_Interrupt_Callback);
 
     Emulator_OnUpdate();
 
@@ -769,6 +771,36 @@ void Emulator_ClearHistory()
     m_InstrHistoryLength = 0;
 }
 
+// Take the next slot of the history ring; the caller fills the record
+static InstructionRecord& Emulator_AddHistoryRecord()
+{
+    InstructionRecord& record = m_InstrHistory[m_InstrHistoryHead];
+    m_InstrHistoryHead = (m_InstrHistoryHead + 1) & (INSTR_HISTORY_SIZE - 1);
+    if (m_InstrHistoryLength < INSTR_HISTORY_SIZE)
+        m_InstrHistoryLength++;
+    return record;
+}
+
+// Short name of the interrupt vector
+LPCTSTR Emulator_GetInterruptName(uint16_t vector)
+{
+    switch (vector)
+    {
+    case 0004: return _T("STOP/BUS");  // STOP key and bus timeout share the vector
+    case 0010: return _T("RSVD");
+    case 0014: return _T("BPT/TBIT");
+    case 0020: return _T("IOT");
+    case 0024: return _T("ACLO");
+    case 0030: return _T("EMT");
+    case 0034: return _T("TRAP");
+    case 0060: return _T("KEYB");
+    case 0064: return _T("TTY");
+    case 0100: return _T("EVNT");
+    case 0274: return _T("KEYB2");
+    default:   return _T("VIRQ");
+    }
+}
+
 // Called by CPU before each instruction is executed; installed always, records history and writes trace
 void CALLBACK Emulator_Instruction_Callback(const CProcessor* pProc, uint16_t address, uint16_t opcode)
 {
@@ -781,15 +813,13 @@ void CALLBACK Emulator_Instruction_Callback(const CProcessor* pProc, uint16_t ad
     memory[2] = g_pBoard->GetWordView(address + 2 * 2, true, &addrtype);
     memory[3] = g_pBoard->GetWordView(address + 3 * 2, true, &addrtype);
 
-    InstructionRecord& record = m_InstrHistory[m_InstrHistoryHead];
+    InstructionRecord& record = Emulator_AddHistoryRecord();
     record.pc = address;
     record.words[0] = memory[0];
     record.words[1] = memory[1];
     record.words[2] = memory[2];
     record.psw = pProc->GetPSW();
-    m_InstrHistoryHead = (m_InstrHistoryHead + 1) & (INSTR_HISTORY_SIZE - 1);
-    if (m_InstrHistoryLength < INSTR_HISTORY_SIZE)
-        m_InstrHistoryLength++;
+    record.interrupt = false;
 
 #if !defined(PRODUCT)
     uint32_t dwTrace = g_pBoard->GetTrace();
@@ -812,6 +842,36 @@ void CALLBACK Emulator_Instruction_Callback(const CProcessor* pProc, uint16_t ad
     }
     else
         _sntprintf(buffer, sizeof(buffer) / sizeof(TCHAR) - 1, _T("%s\t%s\t%s\r\n"), bufaddr, instr, args);
+
+    DebugLog(buffer);
+#endif // !PRODUCT
+}
+
+// Called by the CPU when an interrupt has been taken, the new PC/PSW are already loaded;
+// installed always, records history and writes trace
+void CALLBACK Emulator_Interrupt_Callback(const CProcessor* pProc, uint16_t oldPc, uint16_t vector)
+{
+    InstructionRecord& record = Emulator_AddHistoryRecord();
+    record.pc = oldPc;
+    record.words[0] = vector;
+    record.words[1] = pProc->GetPC();
+    record.words[2] = pProc->GetPSW();
+    record.psw = pProc->GetPSW();
+    record.interrupt = true;
+
+#if !defined(PRODUCT)
+    uint32_t dwTrace = g_pBoard->GetTrace();
+    if ((dwTrace & TRACE_CPUINT) == 0)
+        return;
+
+    TCHAR bufaddr[7], bufvector[7], bufnewpc[7];
+    PrintOctalValue(bufaddr, oldPc);
+    PrintOctalValue(bufvector, vector);
+    PrintOctalValue(bufnewpc, pProc->GetPC());
+
+    TCHAR buffer[80];
+    _sntprintf(buffer, sizeof(buffer) / sizeof(TCHAR) - 1, _T("%s\tINT\t%s\t%s\t%s\r\n"),
+            bufaddr, bufvector, Emulator_GetInterruptName(vector), bufnewpc);
 
     DebugLog(buffer);
 #endif // !PRODUCT

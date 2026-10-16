@@ -182,7 +182,7 @@ path the CPU itself uses, so writes work for both RAM and memory-mapped I/O port
 |---|---|
 | `i`, `info` | Show uptime and (if the configuration has a floppy controller) drive status |
 | `t`, `trace` | Toggle instruction tracing to `trace.log` on/off |
-| `tXXXXXX`, `trace XXXXXX` | Set the trace mask explicitly (see `TRACE_xxx` in `emubase/Board.h`) |
+| `tXXXXXX`, `trace XXXXXX` | Set the trace mask explicitly (see `TRACE_xxx` in `emubase/Board.h`; e.g. `t3` = instructions only, `t4` = interrupts only, plain `t` = all) |
 | `tc`, `t clear`, `trace clear` | Clear `trace.log` |
 | `l`, `last` | Show the last 20 executed CPU instructions |
 | `lN`, `last N` | Show the last `N` executed instructions, `N` = 1..256 (decimal) |
@@ -191,6 +191,10 @@ The instruction history is always recorded (a 256-entry ring buffer, cleared by 
 `stateload` and configuration changes). Output is oldest first, newest last, one line per
 instruction: `ADDR: W0 W1 W2  PSW: DISASM`, where `W0..W2` are the opcode and its operand
 words (blank if absent) and `PSW` is the status word before the instruction executed.
+Interrupts and traps taken by the CPU are recorded too, as
+`ADDR:         NEWPC  NEWPSW: INT VECTOR NAME`, where `ADDR` is where the interrupt
+appeared, `NEWPC`/`NEWPSW` are the handler address and PSW, e.g.
+`100210:               100112  000200: INT 000030 EMT`.
 
 Tracing is done by a CPU instruction callback, so every executed instruction is logged,
 including single `step`/`s` and `next`/`n`.
