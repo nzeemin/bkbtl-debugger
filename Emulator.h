@@ -15,6 +15,10 @@ extern BKConfiguration g_nEmulatorConfiguration;  // Current configuration
 // Directory to look for .rom files in, set via the --romdir command-line
 // option. Empty means "current directory" (the historical behavior).
 extern std::string g_strRomDirectory;
+
+// True = emulate the K1801VM1G processor (MUL instruction, timer interrupt 0270),
+// set via the --vm1g command-line option. Default is the K1801VM1A/B/V chip.
+extern bool g_okEmulatorVM1G;
 extern bool g_okEmulatorRunning;
 
 extern uint8_t* g_pEmulatorRam;  // RAM values - for change tracking

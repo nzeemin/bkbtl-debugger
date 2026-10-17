@@ -22,6 +22,7 @@ BKBTL. If not, see <http://www.gnu.org/licenses/>. */
 CMotherboard* g_pBoard = nullptr;
 BKConfiguration g_nEmulatorConfiguration;  // Current configuration
 std::string g_strRomDirectory;  // Directory to look for .rom files in; empty = current directory
+bool g_okEmulatorVM1G = false;  // K1801VM1G processor variant
 
 static bool g_okEmulatorInitialized = false;
 bool g_okEmulatorRunning = false;
@@ -251,7 +252,8 @@ void Emulator_Done()
 
 bool Emulator_InitConfiguration(BKConfiguration configuration)
 {
-    g_pBoard->SetConfiguration(configuration);
+    // The processor variant is not part of g_nEmulatorConfiguration, it is only OR-ed into the board configuration
+    g_pBoard->SetConfiguration(g_okEmulatorVM1G ? (configuration | BK_COPT_VM1G) : configuration);
 
     uint8_t buffer[8192];
 
@@ -796,6 +798,7 @@ LPCTSTR Emulator_GetInterruptName(uint16_t vector)
     case 0060: return _T("KEYB");
     case 0064: return _T("TTY");
     case 0100: return _T("EVNT");
+    case 0270: return _T("TIMER");  // K1801VM1G timer
     case 0274: return _T("KEYB2");
     default:   return _T("VIRQ");
     }

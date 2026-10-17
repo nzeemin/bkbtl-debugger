@@ -87,6 +87,7 @@ void PrintUsage()
 {
     std::wcout << std::endl << L"Usage:" << std::endl
             << L"  --romdir DIR   Directory to look for .rom files in; default is the current directory" << std::endl
+            << L"  --vm1g         Emulate the K1801VM1G processor (MUL, timer interrupt); default is VM1A/B/V" << std::endl
             << L"  conf:NAME      Select machine configuration; default is BK-0010-BASIC" << std::endl
             << L"                 Available: ";
     for (size_t i = 0; i < ConfigurationNamesCount; i++)
@@ -94,9 +95,7 @@ void PrintUsage()
         if (i > 0) std::wcout << L", ";
         std::wcout << ConfigurationNames[i].name;
     }
-    std::wcout << std::endl
-            << L"  Options:" << std::endl
-            << L"    " << OPTIONSTR << L"TODO" << std::endl;
+    std::wcout << std::endl;
 }
 
 bool ParseCommandLine(std::vector<std::wstring>& wargs)
@@ -114,6 +113,10 @@ bool ParseCommandLine(std::vector<std::wstring>& wargs)
             }
             argi++;
             g_strRomDirectory = WStringToNarrowString(wargs[argi]);
+        }
+        else if (warg == L"--vm1g")
+        {
+            g_okEmulatorVM1G = true;
         }
         else if (arg[0] == OPTIONCHAR)
         {
@@ -230,7 +233,8 @@ int wmain_impl(std::vector<std::wstring>& wargs)
         return 255;
     }
 
-    std::wcout << L"Configuration: " << GetConfigurationName(g_nSelectedConfiguration) << std::endl;
+    std::wcout << L"Configuration: " << GetConfigurationName(g_nSelectedConfiguration)
+               << (g_okEmulatorVM1G ? L" (K1801VM1G)" : L"") << std::endl;
 
     if (!Emulator_Init())
     {

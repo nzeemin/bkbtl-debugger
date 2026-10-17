@@ -58,7 +58,13 @@ If a ROM is missing, the debugger reports which one and exits cleanly rather tha
 ./bkbtldebug                          # default configuration: BK-0010-BASIC
 ./bkbtldebug conf:BK-0011M-FDD        # pick a configuration explicitly
 ./bkbtldebug --romdir /path/to/roms   # look for .rom files there instead of the current directory
+./bkbtldebug --vm1g                   # emulate the K1801VM1G processor
 ```
+
+`--vm1g` selects the K1801VM1G processor variant, which adds the `MUL` instruction and a timer
+interrupt (vector 0270, shown as `TIMER` in `l`/`last` and the trace). Without it the default
+K1801VM1A/B/V chip is emulated: `MUL` traps as an illegal instruction (vector 010) and there is
+no timer interrupt. The variant can be combined with any `conf:NAME`, in any argument order.
 
 `--romdir DIR` takes a separate argument (not `--romdir=DIR`) and can be combined with `conf:NAME`
 in either order. If a ROM still can't be found, the debugger reports the exact path it tried.
